@@ -1,0 +1,39 @@
+include/xtils/net/http_multipart.h
+  s_9a534cd7b585e3::t_0bcc69c4fa995d 1-76
+tests/http_multipart_test.cc
+  s_9a534cd7b585e3::t_6ab7682f0f21a4 1-355
+src/net/http_multipart.cc
+  s_9a534cd7b585e3::t_ac5cc18a6ec323 1-86,88-267
+tests/http_test.cc
+  s_9a534cd7b585e3::t_e1ee06b06aaf8f 437-489
+  s_9a534cd7b585e3::t_d6eb2c4ebdefcb 8,10
+tests/CMakeLists.txt
+  s_9a534cd7b585e3::t_d20ab9045f3513 43
+include/xtils/net/http_router.h
+  s_9a534cd7b585e3::t_ef29aa762bcb93 11,103-112
+src/net/http_router.cc
+  s_9a534cd7b585e3::t_7534f605f97288 130-158
+  s_9a534cd7b585e3::t_77328cce2a0ba1 312-314
+  s_9a534cd7b585e3::t_92dbe7e135393d 244-261
+include/xtils/net/http_server.h
+  s_9a534cd7b585e3::t_0a738d99cff8aa 91-97
+src/net/http_server.cc
+  s_9a534cd7b585e3::t_92b5e9d7def597 495-503,507-533
+  s_9a534cd7b585e3::t_f46e193c64dc5d 3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "8599e88f5fc76e1afc38dec04f16447797f516ac",
+  "prompts": {},
+  "sessions": {
+    "s_9a534cd7b585e3": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019e2b86-9d7d-730f-84c4-7be95743a062",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Albert Lv <altair.albert@gmail.com>"
+    }
+  }
+}
