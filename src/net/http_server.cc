@@ -1,5 +1,7 @@
 #include "xtils/net/http_server.h"
 
+#include <array>
+#include <fstream>
 #include <vector>
 
 #include "xtils/logging/logger.h"
@@ -488,6 +490,45 @@ void HttpServerConnection::SendResponse(const char* http_code,
   SendResponseHeaders(http_code, headers, content.size());
   SendResponseBody(content.data(), content.size());
   if (!keepalive_) Close();
+}
+
+bool HttpServerConnection::SendFileStreaming(const std::string& file_path,
+                                             const char* http_code,
+                                             const HttpHeaders& headers) {
+  std::ifstream file(file_path, std::ios::binary | std::ios::ate);
+  if (!file.is_open()) {
+    LogE("[HTTP] Failed to open file for streaming: %s", file_path.c_str());
+    return false;
+  }
+
+  auto pos = file.tellg();
+  if (pos < 0) return false;
+  const size_t file_size = static_cast<size_t>(pos);
+  file.seekg(0, std::ios::beg);
+
+  SendResponseHeaders(http_code, headers, file_size);
+
+  constexpr size_t kChunkSize = 64 * 1024;  // 64KB
+  std::array<char, kChunkSize> buf;
+  size_t remaining = file_size;
+
+  while (remaining > 0) {
+    size_t to_read = std::min(remaining, kChunkSize);
+    file.read(buf.data(), static_cast<std::streamsize>(to_read));
+    size_t bytes_read = static_cast<size_t>(file.gcount());
+    if (bytes_read == 0) break;
+    SendResponseBody(buf.data(), bytes_read);
+    remaining -= bytes_read;
+  }
+
+  if (remaining > 0) {
+    LogE("[HTTP] Streaming file read truncated: %s", file_path.c_str());
+    if (!keepalive_) Close();
+    return false;
+  }
+
+  if (!keepalive_) Close();
+  return true;
 }
 
 void HttpServerConnection::SendWebsocketMessage(const void* data, size_t len) {

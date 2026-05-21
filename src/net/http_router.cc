@@ -127,6 +127,35 @@ std::string HttpRequestContext::GetClientIP() const {
   return "127.0.0.1";
 }
 
+const std::vector<MultipartFormField>&
+HttpRequestContext::GetMultipartFields() const {
+  if (!multipart_parsed_) ParseMultipart();
+  return multipart_fields_;
+}
+
+const std::vector<MultipartFormFile>&
+HttpRequestContext::GetMultipartFiles() const {
+  if (!multipart_parsed_) ParseMultipart();
+  return multipart_files_;
+}
+
+void HttpRequestContext::ParseMultipart() const {
+  multipart_parsed_ = true;
+  if (!IsMultipart()) return;
+
+  std::string ct = GetHeader("content-type");
+  std::string boundary = MultipartParser::ExtractBoundary(ct);
+  if (boundary.empty()) return;
+
+  MultipartParser parser(request->body, boundary);
+  if (parser.Parse()) {
+    multipart_fields_ = parser.GetFields();
+    multipart_files_ = parser.GetFiles();
+  } else {
+    // TODO: Parse failed; fields/files will be empty with no error signal.
+  }
+}
+
 // HttpResponse implementation
 
 HttpResponse& HttpResponse::Status(int code) {
@@ -212,7 +241,24 @@ HttpResponse& HttpResponse::Redirect(const std::string& url, int code) {
 
 void HttpResponse::Send(HttpServerConnection* conn) {
   if (is_file_response_) {
-    HttpResponse::SendFile(conn, file_path_);
+    if (!HttpUtils::FileExists(file_path_)) {
+      HttpResponse::SendError(conn, 404, "File Not Found");
+      return;
+    }
+
+    // Build headers: MIME type + user-specified headers.
+    std::string ext = HttpUtils::GetFileExtension(file_path_);
+    std::string mime_type = HttpUtils::GetMimeType(ext);
+    HttpHeaders server_headers;
+    server_headers.emplace_back("Content-Type", mime_type);
+    for (const auto& h : headers_) {
+      server_headers.emplace_back(h.name, h.value);
+    }
+
+    if (!conn->SendFileStreaming(file_path_, status_.c_str(),
+                                 server_headers)) {
+      HttpResponse::SendError(conn, 500, "Failed to read file");
+    }
   } else {
     // Convert HttpHeaders to server Header format
     HttpHeaders server_headers;
@@ -257,19 +303,15 @@ void HttpResponse::SendFile(HttpServerConnection* conn,
     return;
   }
 
-  std::string content = HttpUtils::ReadFileContent(file_path);
-  if (content.empty()) {
-    HttpResponse::SendError(conn, 500, "Failed to read file");
-    return;
-  }
-
   std::string ext = HttpUtils::GetFileExtension(file_path);
   std::string mime_type = HttpUtils::GetMimeType(ext);
 
   HttpHeaders server_headers;
   server_headers.emplace_back("Content-Type", mime_type);
 
-  conn->SendResponse("200 OK", server_headers, content);
+  if (!conn->SendFileStreaming(file_path, "200 OK", server_headers)) {
+    HttpResponse::SendError(conn, 500, "Failed to read file");
+  }
 }
 
 // Route implementation

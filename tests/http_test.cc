@@ -5,7 +5,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -432,3 +434,56 @@ TEST_CASE("HTTP: middleware") {
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
+TEST_CASE("HTTP: streaming file response") {
+  auto tr = ThreadTaskRunner::CreateAndStart("http_file");
+  uint16_t port = FindPort(19780);
+  REQUIRE(port != 0);
+
+  // Create a temp file with known content (128KB to exceed chunk size).
+  std::string temp_path = "/tmp/xtils_http_test_stream.bin";
+  struct TempFileGuard {
+    std::string path;
+    ~TempFileGuard() { std::remove(path.c_str()); }
+  };
+  TempFileGuard guard{temp_path};
+  {
+    std::ofstream f(temp_path, std::ios::binary);
+    REQUIRE(f.is_open());
+    // Write 128KB of repeating pattern.
+    std::string pattern = "ABCDEFGHIJKLMNOP";  // 16 bytes
+    for (int i = 0; i < 8192; ++i) {
+      f.write(pattern.data(), pattern.size());
+    }
+  }
+
+  auto router = std::make_unique<HttpRouter>();
+  router->Get("/download",
+              [&temp_path](const HttpRequestContext& ctx, HttpResponse& resp) {
+                resp.File(temp_path);
+              });
+
+  auto handler =
+      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  HttpServer server(&tr, handler.get());
+  REQUIRE(server.Start("127.0.0.1", port));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  auto resp = DoHttpRequest(
+      tr, port,
+      "GET /download HTTP/1.1\r\nHost: localhost\r\nConnection: "
+      "close\r\n\r\n",
+      5000);
+
+  CHECK(resp.status_code == 200);
+  CHECK(resp.body.size() == 128 * 1024);
+  // Verify content integrity - first and last 16 bytes.
+  CHECK(resp.body.substr(0, 16) == "ABCDEFGHIJKLMNOP");
+  CHECK(resp.body.substr(128 * 1024 - 16, 16) == "ABCDEFGHIJKLMNOP");
+  // Check Content-Length header was correct.
+  CHECK(resp.raw.find("Content-Length: 131072") != std::string::npos);
+
+  tr.PostTask([&server]() { server.Stop(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+}

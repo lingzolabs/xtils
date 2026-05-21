@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "xtils/net/http_common.h"
+#include "xtils/net/http_multipart.h"
 #include "xtils/net/http_server.h"
 #include "xtils/utils/string_view.h"
 
@@ -99,6 +100,16 @@ struct HttpRequestContext {
 
   // Get client IP (simplified)
   std::string GetClientIP() const;
+
+  // Multipart form data access (lazy-parsed on first call).
+  const std::vector<MultipartFormField>& GetMultipartFields() const;
+  const std::vector<MultipartFormFile>& GetMultipartFiles() const;
+
+ private:
+  void ParseMultipart() const;
+  mutable bool multipart_parsed_ = false;
+  mutable std::vector<MultipartFormField> multipart_fields_;
+  mutable std::vector<MultipartFormFile> multipart_files_;
 };
 
 // HTTP response builder

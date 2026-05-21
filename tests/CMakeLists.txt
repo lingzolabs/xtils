@@ -40,3 +40,4 @@ add_xtils_test(test_signal_handler signal_handler_test.cc)
 set_tests_properties(test_unix_socket test_tcp test_udp test_http
     PROPERTIES RESOURCE_LOCK "network_port")
 add_xtils_test(test_http_common http_common_test.cc)
+add_xtils_test(test_http_multipart http_multipart_test.cc)
