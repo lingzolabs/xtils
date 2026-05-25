@@ -617,6 +617,34 @@ TEST_CASE("BtFactory: Retry succeeds") {
   CHECK(tree->tick() == Status::Success);
 }
 
+TEST_CASE("BtFactory: Retry propagates Running without consuming attempts") {
+  BtFactory factory;
+  int tick_count = 0;
+  factory.RegisterSimpleAction([&]() -> Status {
+    tick_count++;
+    if (tick_count < 3) return Status::Running;
+    return Status::Success;
+  }, "RunThenSucceed");
+
+  auto json_str = R"({
+    "root": {
+      "name": "Retry",
+      "ports": {"max_retries": 3},
+      "children": [
+        {"name": "RunThenSucceed"}
+      ]
+    }
+  })";
+  auto json = Json::parse(json_str);
+  auto tree = factory.buildFromJson(*json);
+
+  // Child returns Running -> Retry must propagate Running (not consume retries)
+  CHECK(tree->tick() == Status::Running);
+  CHECK(tree->tick() == Status::Running);
+  // Child returns Success -> Retry returns Success
+  CHECK(tree->tick() == Status::Success);
+}
+
 // ============================================================================
 // Repeater decorator
 // ============================================================================

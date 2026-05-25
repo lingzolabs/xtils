@@ -108,6 +108,10 @@ class Retry : public Decorator {
       if (status == xtils::Status::Success) {
         return xtils::Status::Success;
       }
+      if (status == xtils::Status::Running) {
+        return xtils::Status::Running;
+      }
+      // Failure: retry
       attempt_count_++;
       children[0]->reset();
     }
