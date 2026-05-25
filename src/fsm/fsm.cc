@@ -19,6 +19,7 @@
 
 #include "xtils/fsm/fsm.h"
 
+#include <algorithm>
 #include <sstream>
 
 namespace xtils {
@@ -61,14 +62,28 @@ StateId FSM::AddState(const std::string& name, StateCallback on_enter,
       std::make_unique<State>(name, std::move(on_enter), std::move(on_exit)));
 }
 
+void FSM::RegisterEvent(EventType event, const std::string& name) {
+  withLock([&]() { event_names_[event] = name; });
+}
+
+std::string FSM::GetEventName(EventType event) const {
+  return withLock([&]() -> std::string {
+    auto it = event_names_.find(event);
+    return it != event_names_.end() ? it->second : std::to_string(event);
+  });
+}
+
 void FSM::AddTransition(const std::string& from, const std::string& to,
                         EventType event,
                         std::shared_ptr<TransitionCondition> condition) {
-  auto from_id = GetStateId(from);
-  if (!from_id) throw StateNotFoundException(from);
-  auto to_id = GetStateId(to);
-  if (!to_id) throw StateNotFoundException(to);
-  AddTransition(*from_id, *to_id, event, std::move(condition));
+  withLock([&]() {
+    State* from_state = getState(from);
+    if (!from_state) throw StateNotFoundException(from);
+    State* to_state = getState(to);
+    if (!to_state) throw StateNotFoundException(to);
+    auto& transitions = from_state->transitions_[event];
+    transitions.emplace_back(to_state->id_, std::move(condition));
+  });
 }
 
 void FSM::AddTransition(StateId from, StateId to, EventType event,
@@ -93,23 +108,30 @@ void FSM::AddTransition(StateId from, StateId to, EventType event,
 void FSM::AddTransition(const std::string& from, const std::string& to,
                         const std::vector<EventType>& events,
                         std::shared_ptr<TransitionCondition> condition) {
-  auto from_id = GetStateId(from);
-  if (!from_id) throw StateNotFoundException(from);
-  auto to_id = GetStateId(to);
-  if (!to_id) throw StateNotFoundException(to);
-
-  for (EventType event : events) {
-    // Create a copy of the condition for each event
-    auto condition_copy =
-        condition ? std::make_shared<TransitionCondition>(*condition) : nullptr;
-    AddTransition(*from_id, *to_id, event, std::move(condition_copy));
-  }
+  withLock([&]() {
+    State* from_state = getState(from);
+    if (!from_state) throw StateNotFoundException(from);
+    State* to_state = getState(to);
+    if (!to_state) throw StateNotFoundException(to);
+    for (EventType event : events) {
+      auto cond_copy = condition ? std::make_shared<TransitionCondition>(*condition) : nullptr;
+      auto& transitions = from_state->transitions_[event];
+      transitions.emplace_back(to_state->id_, std::move(cond_copy));
+    }
+  });
 }
 
 void FSM::Start(const std::string& initial_state) {
-  auto id = GetStateId(initial_state);
-  if (!id) throw StateNotFoundException(initial_state);
-  Start(*id);
+  withLock([&]() {
+    State* state = getState(initial_state);
+    if (!state) throw StateNotFoundException(initial_state);
+    current_state_id_ = state->id_;
+    initial_state_id_ = state->id_;
+    previous_state_id_ = 0;
+    is_started_ = true;
+    state->onEnter(0);
+    addToHistory(0, current_state_id_, 0, true, "FSM started");
+  });
 }
 
 void FSM::Start(StateId initial_state_id) {
@@ -119,46 +141,45 @@ void FSM::Start(StateId initial_state_id) {
       throw StateNotFoundException("State ID " +
                                    std::to_string(initial_state_id));
     }
-
     current_state_id_ = initial_state_id;
-    previous_state_id_ = 0;  // No previous state on start
+    initial_state_id_ = initial_state_id;
+    previous_state_id_ = 0;
     is_started_ = true;
-
-    // Call onEnter for initial state
-    state->onEnter(0);  // Event 0 for initialization
-
+    state->onEnter(0);
     addToHistory(0, current_state_id_, 0, true, "FSM started");
   });
 }
 
 void FSM::Reset(const std::string& state) {
-  auto id = GetStateId(state);
-  if (!id) throw StateNotFoundException(state);
-  Reset(*id);
+  withLock([&]() {
+    State* target = getState(state);
+    if (!target) throw StateNotFoundException(state);
+    if (is_started_ && current_state_id_ != 0) {
+      State* current = getState(current_state_id_);
+      if (current) current->onExit(0);
+    }
+    previous_state_id_ = current_state_id_;
+    current_state_id_ = target->id_;
+    is_started_ = true;
+    target->onEnter(0);
+    addToHistory(previous_state_id_, current_state_id_, 0, true, "FSM reset");
+  });
 }
 
 void FSM::Reset(StateId state_id) {
   withLock([&]() {
-    State* state = getState(state_id);
-    if (!state) {
+    State* target = getState(state_id);
+    if (!target) {
       throw StateNotFoundException("State ID " + std::to_string(state_id));
     }
-
-    // Exit current state if FSM is running
     if (is_started_ && current_state_id_ != 0) {
-      State* current_state = getState(current_state_id_);
-      if (current_state) {
-        current_state->onExit(0);  // Event 0 for reset
-      }
+      State* current = getState(current_state_id_);
+      if (current) current->onExit(0);
     }
-
     previous_state_id_ = current_state_id_;
     current_state_id_ = state_id;
     is_started_ = true;
-
-    // Enter new state
-    state->onEnter(0);  // Event 0 for reset
-
+    target->onEnter(0);
     addToHistory(previous_state_id_, current_state_id_, 0, true, "FSM reset");
   });
 }
@@ -270,30 +291,71 @@ std::string FSM::ToDotGraph() const {
   return withLock([&]() -> std::string {
     std::stringstream ss;
     ss << "digraph FSM {\n";
-    ss << "rankdir=LR;\n";
+    ss << "  rankdir=LR;\n";
+    ss << "  node [shape=rectangle, style=\"rounded\", fontname=\"sans-serif\"];\n";
+    ss << "  edge [fontname=\"sans-serif\", fontsize=10];\n\n";
 
-    // Add states
-    for (const auto& [id, state] : states_) {
-      ss << id << " [label=\"" << state->name();
-      if (id == current_state_id_) {
-        ss << "\",style=filled,color=red];\n";
-      } else {
-        ss << "\"];\n";
+    // Initial state marker
+    if (is_started_ && initial_state_id_ != 0) {
+      ss << "  __start__ [shape=point, width=0.2, height=0.2];\n";
+      State* init = getState(initial_state_id_);
+      if (init) {
+        ss << "  __start__ -> " << initial_state_id_ << ";\n";
       }
     }
 
-    // Add transitions
-    for (const auto& [id, state] : states_) {
-      for (const auto& [event, transitions] : state->transitions_) {
-        for (const auto& transition : transitions) {
+    // Collect and sort states for deterministic output
+    std::vector<StateId> state_ids;
+    state_ids.reserve(states_.size());
+    for (const auto& [id, _] : states_) {
+      state_ids.push_back(id);
+    }
+    std::sort(state_ids.begin(), state_ids.end());
+
+    // Add states
+    ss << "\n";
+    for (StateId id : state_ids) {
+      State* state = getState(id);
+      if (!state) continue;
+      ss << "  " << id << " [label=\"" << state->name() << "\"";
+      if (id == current_state_id_) {
+        ss << ", style=\"rounded,filled\", fillcolor=\"#a5d8ff\"";
+      }
+      ss << "];\n";
+    }
+
+    // Add transitions (sorted for determinism)
+    ss << "\n";
+    for (StateId from_id : state_ids) {
+      State* state = getState(from_id);
+      if (!state) continue;
+
+      // Sort events
+      std::vector<EventType> events;
+      events.reserve(state->transitions_.size());
+      for (const auto& [evt, _] : state->transitions_) {
+        events.push_back(evt);
+      }
+      std::sort(events.begin(), events.end());
+
+      for (EventType evt : events) {
+        const auto& targets = state->transitions_.at(evt);
+        for (const auto& transition : targets) {
           State* target = getState(transition.target_state_id);
-          if (target) {
-            ss << state->id_ << " -> " << target->id_ << " [label=\"" << event;
-            if (transition.condition && !transition.condition->name().empty()) {
-              ss << "\\n" << transition.condition->name();
-            }
-            ss << "\"];\n";
+          if (!target) continue;
+
+          // Get event name
+          auto name_it = event_names_.find(evt);
+          std::string evt_label = (name_it != event_names_.end())
+                                      ? name_it->second
+                                      : std::to_string(evt);
+
+          ss << "  " << from_id << " -> " << transition.target_state_id
+             << " [label=\"" << evt_label;
+          if (transition.condition && !transition.condition->name().empty()) {
+            ss << "\\n[" << transition.condition->name() << "]";
           }
+          ss << "\"];\n";
         }
       }
     }
@@ -303,9 +365,9 @@ std::string FSM::ToDotGraph() const {
   });
 }
 
-const std::vector<HistoryEntry>& FSM::GetHistory() const {
+const std::deque<HistoryEntry>& FSM::GetHistory() const {
   return withLock(
-      [&]() -> const std::vector<HistoryEntry>& { return history_; });
+      [&]() -> const std::deque<HistoryEntry>& { return history_; });
 }
 
 void FSM::ClearHistory() {
@@ -316,7 +378,7 @@ void FSM::SetMaxHistorySize(std::size_t size) {
   withLock([&]() {
     max_history_size_ = size;
     while (history_.size() > max_history_size_) {
-      history_.erase(history_.begin());
+      history_.pop_front();
     }
   });
 }
@@ -325,12 +387,9 @@ void FSM::SetMaxHistorySize(std::size_t size) {
 
 void FSM::addToHistory(StateId from, StateId to, EventType event,
                        bool transitioned, const std::string& desc) {
-  // This method should only be called from within withLock
   history_.emplace_back(from, to, event, transitioned, desc);
-
-  // Maintain history size limit
   while (history_.size() > max_history_size_) {
-    history_.erase(history_.begin());
+    history_.pop_front();
   }
 }
 

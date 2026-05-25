@@ -298,9 +298,28 @@ TEST_CASE("FSM DOT Graph Generation") {
     fsm.Start("Process");
     std::string dot = fsm.ToDotGraph();
 
-    // Current state should be highlighted
     CHECK(dot.find("Process") != std::string::npos);
-    CHECK(dot.find("style=filled,color=red") != std::string::npos);
+    CHECK(dot.find("fillcolor") != std::string::npos);
+  }
+
+  SUBCASE("Event name registration and DOT output") {
+    fsm.RegisterEvent(EVENT_A, "start_process");
+    fsm.RegisterEvent(EVENT_B, "finish_process");
+    fsm.Start("Start");
+
+    std::string dot = fsm.ToDotGraph();
+
+    // Event names should appear instead of numbers
+    CHECK(dot.find("start_process") != std::string::npos);
+    CHECK(dot.find("finish_process") != std::string::npos);
+    // Initial state marker
+    CHECK(dot.find("__start__") != std::string::npos);
+  }
+
+  SUBCASE("GetEventName") {
+    fsm.RegisterEvent(EVENT_A, "event_alpha");
+    CHECK(fsm.GetEventName(EVENT_A) == "event_alpha");
+    CHECK(fsm.GetEventName(EVENT_B) == std::to_string(EVENT_B));
   }
 }
 

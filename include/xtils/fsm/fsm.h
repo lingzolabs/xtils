@@ -28,6 +28,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <deque>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -101,17 +103,6 @@ class TransitionCondition {
 
   const std::string& name() const { return name_; }
 
-  // Deprecated wrappers
-  [[deprecated("Use CanTransition() instead")]]
-  bool canTransition(const State& from, const State& to,
-                     EventType event) const {
-    return CanTransition(from, to, event);
-  }
-  [[deprecated("Use ExecuteAction() instead")]]
-  void executeAction(const State& from, const State& to,
-                     EventType event) const {
-    ExecuteAction(from, to, event);
-  }
 
  private:
   std::string name_;
@@ -266,77 +257,17 @@ class FSM {
   std::optional<std::string> GetStateName(StateId id) const;
   std::string ToDotGraph() const;
 
+  // Event name registration
+  void RegisterEvent(EventType event, const std::string& name);
+  std::string GetEventName(EventType event) const;
+
   // History and debugging
-  const std::vector<HistoryEntry>& GetHistory() const;
+  const std::deque<HistoryEntry>& GetHistory() const;
   void ClearHistory();
   void SetMaxHistorySize(std::size_t size);
 
   // Thread safety
   void EnableThreadSafety(bool enable = true) { thread_safe_ = enable; }
-
-  // Deprecated wrappers
-  [[deprecated("Use AddState() instead")]]
-  StateId addState(std::unique_ptr<State> state) { return AddState(std::move(state)); }
-  [[deprecated("Use AddState() instead")]]
-  StateId addState(const std::string& name) { return AddState(name); }
-  [[deprecated("Use AddState() instead")]]
-  StateId addState(const std::string& name, StateCallback on_enter) {
-    return AddState(name, std::move(on_enter));
-  }
-  [[deprecated("Use AddState() instead")]]
-  StateId addState(const std::string& name, StateCallback on_enter,
-                   StateCallback on_exit) {
-    return AddState(name, std::move(on_enter), std::move(on_exit));
-  }
-  [[deprecated("Use AddTransition() instead")]]
-  void addTransition(const std::string& from, const std::string& to,
-                     EventType event,
-                     std::shared_ptr<TransitionCondition> condition = nullptr) {
-    AddTransition(from, to, event, std::move(condition));
-  }
-  [[deprecated("Use AddTransition() instead")]]
-  void addTransition(StateId from, StateId to, EventType event,
-                     std::shared_ptr<TransitionCondition> condition = nullptr) {
-    AddTransition(from, to, event, std::move(condition));
-  }
-  [[deprecated("Use AddTransition() instead")]]
-  void addTransition(const std::string& from, const std::string& to,
-                     const std::vector<EventType>& events,
-                     std::shared_ptr<TransitionCondition> condition = nullptr) {
-    AddTransition(from, to, events, std::move(condition));
-  }
-  [[deprecated("Use Start() instead")]]
-  void start(const std::string& initial_state) { Start(initial_state); }
-  [[deprecated("Use Start() instead")]]
-  void start(StateId initial_state_id) { Start(initial_state_id); }
-  [[deprecated("Use Reset() instead")]]
-  void reset(const std::string& state) { Reset(state); }
-  [[deprecated("Use Reset() instead")]]
-  void reset(StateId state_id) { Reset(state_id); }
-  [[deprecated("Use ProcessEvent() instead")]]
-  void processEvent(EventType event) { ProcessEvent(event); }
-  [[deprecated("Use IsInState() instead")]]
-  bool isInState(const std::string& state_name) const { return IsInState(state_name); }
-  [[deprecated("Use IsInState() instead")]]
-  bool isInState(StateId state_id) const { return IsInState(state_id); }
-  [[deprecated("Use GetCurrentStateName() instead")]]
-  std::optional<std::string> getCurrentStateName() const { return GetCurrentStateName(); }
-  [[deprecated("Use GetCurrentStateId() instead")]]
-  std::optional<StateId> getCurrentStateId() const { return GetCurrentStateId(); }
-  [[deprecated("Use GetStateId() instead")]]
-  std::optional<StateId> getStateId(const std::string& name) const { return GetStateId(name); }
-  [[deprecated("Use GetStateName() instead")]]
-  std::optional<std::string> getStateName(StateId id) const { return GetStateName(id); }
-  [[deprecated("Use ToDotGraph() instead")]]
-  std::string toDotGraph() const { return ToDotGraph(); }
-  [[deprecated("Use GetHistory() instead")]]
-  const std::vector<HistoryEntry>& getHistory() const { return GetHistory(); }
-  [[deprecated("Use ClearHistory() instead")]]
-  void clearHistory() { ClearHistory(); }
-  [[deprecated("Use SetMaxHistorySize() instead")]]
-  void setMaxHistorySize(std::size_t size) { SetMaxHistorySize(size); }
-  [[deprecated("Use EnableThreadSafety() instead")]]
-  void enableThreadSafety(bool enable = true) { EnableThreadSafety(enable); }
 
  private:
   StateId generateId() { return ++state_ids_; }
@@ -351,8 +282,10 @@ class FSM {
   bool is_started_ = false;
   int state_ids_ = 0;
 
-  std::vector<HistoryEntry> history_;
+  std::deque<HistoryEntry> history_;
   std::size_t max_history_size_;
+  std::unordered_map<EventType, std::string> event_names_;
+  StateId initial_state_id_{0};
 
   // Helper methods
   void addToHistory(StateId from, StateId to, EventType event,
@@ -388,22 +321,7 @@ inline std::shared_ptr<TransitionCondition> MakeCondition(
                                                std::move(action));
 }
 
-// Deprecated wrappers
-[[deprecated("Use MakeGuard() instead")]]
-inline std::shared_ptr<TransitionCondition> makeGuard(const std::string& name,
-                                                      TransitionGuard guard) {
-  return MakeGuard(name, std::move(guard));
-}
-[[deprecated("Use MakeAction() instead")]]
-inline std::shared_ptr<TransitionCondition> makeAction(
-    const std::string& name, TransitionAction action) {
-  return MakeAction(name, std::move(action));
-}
-[[deprecated("Use MakeCondition() instead")]]
-inline std::shared_ptr<TransitionCondition> makeCondition(
-    const std::string& name, TransitionGuard guard, TransitionAction action) {
-  return MakeCondition(name, std::move(guard), std::move(action));
-}
-
 }  // namespace fsm
 }  // namespace xtils
+
+#include "fsm_compat.h"
