@@ -1,0 +1,21 @@
+include/xtils/app/service.h
+  s_f2a3960112be40::t_5a775592775a72 13-28
+src/app/app.cc
+  s_f2a3960112be40::t_f7a4f0cbb43449 242-244,248-250
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "af20fc226c2ffc35c1b179c34f1e71116df4fbf4",
+  "prompts": {},
+  "sessions": {
+    "s_f2a3960112be40": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019e4eb2-9824-78d8-bcbd-a9904940a8ee",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Albert Lv <altair.albert@gmail.com>"
+    }
+  }
+}
