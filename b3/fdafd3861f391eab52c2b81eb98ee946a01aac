@@ -1,0 +1,22 @@
+src/fsm/nodes.h
+  s_f2a3960112be40::t_624fba5146223c 111-114
+tests/behavior_tree_test.cc
+  s_f2a3960112be40::t_4256d971b1a4ed 620,641,644
+  s_f2a3960112be40::t_e4d6b4347b601f 621-640,642-643,645-647
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "b3fdafd3861f391eab52c2b81eb98ee946a01aac",
+  "prompts": {},
+  "sessions": {
+    "s_f2a3960112be40": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019e4eb2-9824-78d8-bcbd-a9904940a8ee",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Albert Lv <altair.albert@gmail.com>"
+    }
+  }
+}
