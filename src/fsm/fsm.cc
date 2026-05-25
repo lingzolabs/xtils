@@ -200,8 +200,10 @@ void FSM::ProcessEvent(EventType event) {
     if (transitions_it == current_state->transitions_.end()) {
       // No transitions for this event, just update current state
       current_state->onUpdate(event);
-      addToHistory(current_state_id_, current_state_id_, event, false,
-                   "No transition");
+      if (record_failed_events_) {
+        addToHistory(current_state_id_, current_state_id_, event, false,
+                     "No transition");
+      }
       return;
     }
 
@@ -243,8 +245,10 @@ void FSM::ProcessEvent(EventType event) {
 
     // No valid transition found, update current state
     current_state->onUpdate(event);
-    addToHistory(current_state_id_, current_state_id_, event, false,
-                 "Transition blocked");
+    if (record_failed_events_) {
+      addToHistory(current_state_id_, current_state_id_, event, false,
+                   "Transition blocked");
+    }
   });
 }
 
@@ -365,9 +369,9 @@ std::string FSM::ToDotGraph() const {
   });
 }
 
-const std::deque<HistoryEntry>& FSM::GetHistory() const {
+std::deque<HistoryEntry> FSM::GetHistory() const {
   return withLock(
-      [&]() -> const std::deque<HistoryEntry>& { return history_; });
+      [&]() -> std::deque<HistoryEntry> { return history_; });
 }
 
 void FSM::ClearHistory() {

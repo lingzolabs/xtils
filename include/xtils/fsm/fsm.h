@@ -25,6 +25,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -262,17 +263,19 @@ class FSM {
   std::string GetEventName(EventType event) const;
 
   // History and debugging
-  const std::deque<HistoryEntry>& GetHistory() const;
+  std::deque<HistoryEntry> GetHistory() const;
   void ClearHistory();
   void SetMaxHistorySize(std::size_t size);
+  void SetRecordFailedEvents(bool record) { record_failed_events_ = record; }
 
   // Thread safety
   void EnableThreadSafety(bool enable = true) { thread_safe_ = enable; }
 
  private:
   StateId generateId() { return ++state_ids_; }
-  mutable std::mutex mutex_;
+  mutable std::recursive_mutex mutex_;
   bool thread_safe_ = false;
+  bool record_failed_events_ = false;
 
   std::unordered_map<StateId, std::unique_ptr<State>> states_;
   std::unordered_map<std::string, StateId> name_to_id_;
@@ -296,7 +299,7 @@ class FSM {
   template <typename Func>
   auto withLock(Func&& func) const -> decltype(func()) {
     if (thread_safe_) {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
       return func();
     } else {
       return func();

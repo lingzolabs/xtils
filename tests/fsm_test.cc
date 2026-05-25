@@ -1,8 +1,10 @@
 #include "xtils/fsm/fsm.h"
 
+#include <atomic>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #define DOCTEST_CONFIG_IMPLEMENT
@@ -344,6 +346,97 @@ TEST_CASE("FSM Thread Safety") {
 
     const auto& history = fsm.GetHistory();
     CHECK(history.size() > 0);
+  }
+
+  SUBCASE("Reentrant callback (no deadlock with recursive_mutex)") {
+    // If onEnter calls IsInState/GetCurrentStateName, it must not deadlock
+    std::string captured_name;
+    FSM fsm2;
+    fsm2.EnableThreadSafety(true);
+    fsm2.AddState("A");
+    fsm2.AddState("B",
+        [&](const State&, EventType) {
+          // Re-enter FSM from within callback
+          captured_name = fsm2.GetCurrentStateName().value_or("unknown");
+        });
+    fsm2.AddTransition("A", "B", EVENT_A);
+    fsm2.Start("A");
+    fsm2.ProcessEvent(EVENT_A);
+    // After transition, onEnter(B) called -> GetCurrentStateName() == "B"
+    CHECK(captured_name == "B");
+    CHECK(fsm2.IsInState("B"));
+  }
+}
+
+TEST_CASE("FSM Concurrent Access") {
+  FSM fsm;
+  fsm.EnableThreadSafety(true);
+
+  fsm.AddState("Idle");
+  fsm.AddState("Running");
+  fsm.AddState("Done");
+  fsm.AddTransition("Idle", "Running", EVENT_A);
+  fsm.AddTransition("Running", "Done", EVENT_B);
+  fsm.AddTransition("Done", "Idle", EVENT_C);
+  fsm.Start("Idle");
+
+  SUBCASE("Concurrent ProcessEvent and IsInState") {
+    std::atomic<bool> stop{false};
+    std::atomic<int> query_count{0};
+
+    // Reader thread: continuously queries state
+    std::thread reader([&]() {
+      while (!stop.load()) {
+        fsm.IsInState("Idle");
+        fsm.GetCurrentStateName();
+        fsm.GetHistory();
+        query_count++;
+      }
+    });
+
+    // Writer thread: cycles through states
+    for (int i = 0; i < 1000; ++i) {
+      fsm.ProcessEvent(EVENT_A);  // Idle -> Running
+      fsm.ProcessEvent(EVENT_B);  // Running -> Done
+      fsm.ProcessEvent(EVENT_C);  // Done -> Idle
+    }
+
+    stop.store(true);
+    reader.join();
+
+    CHECK(fsm.IsInState("Idle"));
+    CHECK(query_count.load() > 0);
+  }
+}
+
+TEST_CASE("FSM History Recording Policy") {
+  FSM fsm;
+
+  fsm.AddState("S1");
+  fsm.AddState("S2");
+  fsm.AddTransition("S1", "S2", EVENT_A);
+  fsm.Start("S1");
+
+  SUBCASE("Default: only successful transitions recorded") {
+    fsm.ProcessEvent(EVENT_INVALID);  // No transition, should NOT be recorded
+    auto history = fsm.GetHistory();
+    // Only the Start entry should exist
+    CHECK(history.size() == 1);
+    CHECK(history[0].description == "FSM started");
+
+    fsm.ProcessEvent(EVENT_A);  // Successful transition
+    history = fsm.GetHistory();
+    CHECK(history.size() == 2);
+    CHECK(history[1].transition_occurred == true);
+  }
+
+  SUBCASE("With record_failed_events: all events recorded") {
+    fsm.SetRecordFailedEvents(true);
+    fsm.ProcessEvent(EVENT_INVALID);  // Should be recorded
+    auto history = fsm.GetHistory();
+    CHECK(history.size() == 2);  // Start + failed event
+    CHECK(history[1].transition_occurred == false);
+    CHECK(history[1].description == "No transition");
   }
 }
 
