@@ -238,12 +238,16 @@ void App::deinit() {
     Inspect::Get().Stop();
   }
 #endif
-  async_tg_->Stop();  // stop task group
-  em_->Stop();        // stop event manager
 
+  // Deinit services FIRST while infrastructure is still running,
+  // so services can still use event loop / thread pool for cleanup
+  // (e.g. WebSocket close handshake, flush pending I/O)
   for (auto &p : service_) {
     p->Deinit();
   }
+
+  async_tg_->Stop();  // stop task group
+  em_->Stop();        // stop event manager
   em_.reset();
   timer_.reset();
   async_tg_.reset();

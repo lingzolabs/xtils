@@ -10,6 +10,22 @@ void app_version(uint32_t& major, uint32_t& minor, uint32_t& patch);
 void app_main(xtils::App& ctx, const std::vector<std::string>& args);
 
 namespace xtils {
+
+/**
+ * @brief Base service interface.
+ *
+ * Lifecycle:
+ *   1. Init()   — called after infrastructure (thread pool, event loop) is ready
+ *   2. Deinit() — called BEFORE infrastructure shutdown, so services can still
+ *                 use event loop, thread pool, timers for cleanup (e.g. WebSocket
+ *                 close handshake, flushing pending I/O)
+ *
+ * Constraints for Deinit():
+ *   - Keep it fast (< 3s). The framework does NOT enforce a timeout but a slow
+ *     Deinit blocks the entire shutdown sequence.
+ *   - Do NOT call std::exit() or abort() — let the framework finish orderly.
+ *   - Safe to call: network close, cancel timers, flush buffers, log.
+ */
 class IService {
  public:
   explicit IService(const char* n) : name(n) {}
