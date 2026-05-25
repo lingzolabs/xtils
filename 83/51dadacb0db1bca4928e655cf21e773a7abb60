@@ -1,0 +1,26 @@
+tests/fsm_test.cc
+  s_f2a3960112be40::t_7613c267ee5644 350-440
+  s_f2a3960112be40::t_e255da93d37776 3,7
+src/fsm/fsm.cc
+  s_f2a3960112be40::t_17217d4b20f5e2 203-206,248-251
+  s_f2a3960112be40::t_314f9ebd1d3364 372,374
+include/xtils/fsm/fsm.h
+  s_f2a3960112be40::t_3c20c6d1b6a019 302
+  s_f2a3960112be40::t_66ab50624f9ba0 28,266,269,276,278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "8351dadacb0db1bca4928e655cf21e773a7abb60",
+  "prompts": {},
+  "sessions": {
+    "s_f2a3960112be40": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019e4eb2-9824-78d8-bcbd-a9904940a8ee",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Albert Lv <altair.albert@gmail.com>"
+    }
+  }
+}
