@@ -181,30 +181,54 @@ class State {
 
 // History entry for debugging and logging
 struct HistoryEntry {
-  std::int64_t timestamp;  // Timestamp of the event, nanoseconds since epoch
+  std::int64_t timestamp;  // Wall clock, milliseconds since Unix epoch
   StateId from_state;
   StateId to_state;
   EventType event;
   bool transition_occurred;
+  std::string from_name;     // Human-readable state name
+  std::string to_name;       // Human-readable state name
+  std::string event_name;    // Human-readable event name
   std::string description;
 
   HistoryEntry(StateId from, StateId to, EventType evt, bool transitioned,
-               const std::string& desc = "")
-      : timestamp(std::chrono::steady_clock::now().time_since_epoch().count()),
+               const std::string& desc = "",
+               const std::string& from_n = "",
+               const std::string& to_n = "",
+               const std::string& evt_n = "")
+      : timestamp(std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::system_clock::now().time_since_epoch())
+                      .count()),
         from_state(from),
         to_state(to),
         event(evt),
         transition_occurred(transitioned),
-        description(std::move(desc)) {}
+        from_name(from_n),
+        to_name(to_n),
+        event_name(evt_n),
+        description(desc) {}
 
   std::string toString() const {
     std::stringstream ss;
-    ss << timestamp << ","            //
-       << from_state << ","           //
-       << to_state << ","             //
-       << event << ","                //
-       << transition_occurred << ","  //
-       << description;
+    ss << timestamp << ",";
+    if (!from_name.empty()) {
+      ss << from_name;
+    } else {
+      ss << from_state;
+    }
+    ss << ",";
+    if (!to_name.empty()) {
+      ss << to_name;
+    } else {
+      ss << to_state;
+    }
+    ss << ",";
+    if (!event_name.empty()) {
+      ss << event_name;
+    } else {
+      ss << event;
+    }
+    ss << "," << transition_occurred << "," << description;
     return ss.str();
   }
 };
@@ -264,6 +288,7 @@ class FSM {
 
   // History and debugging
   std::deque<HistoryEntry> GetHistory() const;
+  std::string DumpHistory() const;
   void ClearHistory();
   void SetMaxHistorySize(std::size_t size);
   void SetRecordFailedEvents(bool record) { record_failed_events_ = record; }

@@ -374,6 +374,39 @@ std::deque<HistoryEntry> FSM::GetHistory() const {
       [&]() -> std::deque<HistoryEntry> { return history_; });
 }
 
+std::string FSM::DumpHistory() const {
+  return withLock([&]() -> std::string {
+    std::stringstream ss;
+    ss << "FSM History (" << history_.size() << " entries):\n";
+    for (const auto& entry : history_) {
+      ss << "  [" << entry.timestamp << "] ";
+      if (!entry.from_name.empty()) {
+        ss << entry.from_name;
+      } else {
+        ss << "(" << entry.from_state << ")";
+      }
+      ss << " -> ";
+      if (!entry.to_name.empty()) {
+        ss << entry.to_name;
+      } else {
+        ss << "(" << entry.to_state << ")";
+      }
+      ss << "  event=";
+      if (!entry.event_name.empty()) {
+        ss << entry.event_name;
+      } else {
+        ss << entry.event;
+      }
+      ss << "  ok=" << entry.transition_occurred;
+      if (!entry.description.empty()) {
+        ss << "  (" << entry.description << ")";
+      }
+      ss << "\n";
+    }
+    return ss.str();
+  });
+}
+
 void FSM::ClearHistory() {
   withLock([&]() { history_.clear(); });
 }
@@ -391,7 +424,17 @@ void FSM::SetMaxHistorySize(std::size_t size) {
 
 void FSM::addToHistory(StateId from, StateId to, EventType event,
                        bool transitioned, const std::string& desc) {
-  history_.emplace_back(from, to, event, transitioned, desc);
+  // Resolve names for better readability
+  std::string from_name, to_name, event_name;
+  State* from_s = getState(from);
+  if (from_s) from_name = from_s->name();
+  State* to_s = getState(to);
+  if (to_s) to_name = to_s->name();
+  auto evt_it = event_names_.find(event);
+  if (evt_it != event_names_.end()) event_name = evt_it->second;
+
+  history_.emplace_back(from, to, event, transitioned, desc,
+                        from_name, to_name, event_name);
   while (history_.size() > max_history_size_) {
     history_.pop_front();
   }
