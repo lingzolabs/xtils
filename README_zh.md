@@ -41,3 +41,7 @@ xtils 基于以下设计原则构建：
 ### 构建和安装步骤
 
 [INSTALL.md](./INSTALL.md)
+
+## 许可证
+
+本项目基于 [MIT 许可证](./LICENSE) 开源。

@@ -33,3 +33,7 @@ The library aims to improve **development efficiency, maintainability**, and **r
 ## Installation
 
 [INSTALL.md](./INSTALL.md)
+
+## License
+
+This project is licensed under the [MIT License](./LICENSE).
