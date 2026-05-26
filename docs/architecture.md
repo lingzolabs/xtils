@@ -11,10 +11,11 @@ xtils/
 │   ├── fsm/                # State machines (fsm.h, behavior_tree.h, bt_*logger.h)
 │   ├── logging/            # Logging (logger.h, sink.h, watchdog.h)
 │   ├── net/                # Networking
-│   │   ├── transport/      # Transport layer (transport.h, tls_transport.h, plain_tcp_transport.h)
+│   │   ├── transport/      # Transport layer (transport.h, tls_transport.h, mbedtls_transport.h, tls_factory.h, plain_tcp_transport.h)
 │   │   ├── http_client.h   # HTTP client (sync & async)
 │   │   ├── http_server.h   # HTTP server (low-level, connection-oriented)
 │   │   ├── http_router.h   # HTTP router (Express-style routing, middleware, static files)
+│   │   ├── http_multipart.h # Multipart form-data parser
 │   │   ├── http_common.h   # HTTP types (method, url, headers, status codes)
 │   │   ├── tcp_client.h / tcp_server.h
 │   │   ├── udp_client.h / udp_server.h
@@ -82,8 +83,7 @@ app (app, service — orchestrates all modules)
 | `BUILD_TESTS` | OFF | Build unit tests |
 | `BUILD_EXAMPLES` | OFF | Build examples |
 | `BUILD_WITH_SANITIZERS` | OFF | Enable ASan + UBSan |
-| `USE_OPENSSL` | ON | Use OpenSSL for TLS |
-| `USE_MBEDTLS` | OFF | Use mbedTLS for TLS |
+| `TLS_BACKEND` | openssl | TLS backend: `openssl` or `mbedtls` |
 | `INSPECT_DISABLE` | OFF | Disable inspect module (strips all INSPECT_* macros) |
 
 ### Build Commands
@@ -112,12 +112,19 @@ The library exports `cxx_std_17` as a public compile feature — consumers autom
 
 ## TLS Backend
 
-The library requires exactly one TLS backend:
+The library requires exactly one TLS backend, selected via `TLS_BACKEND`:
 
-- **OpenSSL** (default, `USE_OPENSSL=ON`): links `OpenSSL::SSL`
-- **mbedTLS** (`USE_MBEDTLS=ON`): links `MbedTLS::mbedtls`, `MbedTLS::mbedx509`, `MbedTLS::mbedcrypto`
+- **OpenSSL** (default, `TLS_BACKEND=openssl`): links `OpenSSL::SSL`
+- **mbedTLS** (`TLS_BACKEND=mbedtls`): links `MbedTLS::mbedtls`, `MbedTLS::mbedx509`, `MbedTLS::mbedcrypto`
 
 Compile definition `USE_OPENSSL` or `USE_MBEDTLS` is propagated to consumers.
+
+Backend-agnostic code should use the factory in `net/transport/tls_factory.h`:
+```cpp
+#include "xtils/net/transport/tls_factory.h"
+auto ctx = CreateTlsContext(cfg);
+auto transport = CreateTlsTransport(runner, listener);
+```
 
 ## Code Conventions
 

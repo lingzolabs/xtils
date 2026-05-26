@@ -148,12 +148,35 @@ std::optional<StateId> GetStateId(name) const;
 std::string ToDotGraph() const;  // Graphviz DOT export
 
 // History
-const std::vector<HistoryEntry>& GetHistory() const;
+std::deque<HistoryEntry> GetHistory() const;
 void ClearHistory();
 void SetMaxHistorySize(size_t);
+void SetRecordFailedEvents(bool record);
+std::string DumpHistory() const;
+
+// Event registration
+void RegisterEvent(EventType event, const std::string& name);
+std::string GetEventName(EventType event) const;
 
 // Thread safety
 void EnableThreadSafety(bool enable = true);
+```
+
+### `HistoryEntry`
+
+```cpp
+struct HistoryEntry {
+  std::int64_t timestamp;    // Wall clock (ms since Unix epoch)
+  StateId from_state;
+  StateId to_state;
+  EventType event;
+  bool transition_occurred;
+  std::string from_name;     // Human-readable state name
+  std::string to_name;       // Human-readable state name
+  std::string event_name;    // Human-readable event name
+  std::string description;
+  std::string toString() const;
+};
 ```
 
 ### Transition Conditions
@@ -485,6 +508,9 @@ void AddAllowedOrigin(const std::string&);
 conn->SendResponse(http_code, headers, content, force_close);
 conn->UpgradeToWebsocket(request);
 conn->SendWebsocketMessage(data, len);
+
+// Streaming file response (chunked, memory-efficient)
+bool conn->SendFileStreaming(file_path, http_code, headers);
 ```
 
 ### HTTP Router (Express-style)
@@ -548,6 +574,46 @@ void SetAutoReconnect(bool, delay_ms=5000);
 void SetPingInterval(uint32_t interval_ms);
 void SetMaxMessageSize(size_t);
 void SetVerifySSL(bool);
+```
+
+### Multipart Parser
+
+```cpp
+#include "xtils/net/http_multipart.h"
+
+struct MultipartFormField {
+  std::string name;
+  std::string value;
+};
+
+struct MultipartFormFile {
+  std::string field_name;     // Form field name
+  std::string filename;       // Original filename
+  std::string content_type;   // MIME type
+  std::string content;        // File content (binary-safe)
+};
+
+class MultipartParser {
+  MultipartParser(std::string_view body, std::string_view boundary);
+  bool Parse();
+  const std::vector<MultipartFormField>& GetFields() const;
+  const std::vector<MultipartFormFile>& GetFiles() const;
+  static std::string ExtractBoundary(std::string_view content_type);
+};
+
+// Lazy access via HttpRequestContext:
+ctx.GetMultipartFields();  // Returns const vector<MultipartFormField>&
+ctx.GetMultipartFiles();   // Returns const vector<MultipartFormFile>&
+```
+
+### TLS Factory
+
+```cpp
+#include "xtils/net/transport/tls_factory.h"
+
+// Backend-agnostic TLS object creation
+TlsContextPtr CreateTlsContext(const TlsCertConfig& cfg);
+std::unique_ptr<Transport> CreateTlsTransport(TaskRunner* runner, TransportEventListener* listener);
 ```
 
 ### HTTP Common Types

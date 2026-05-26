@@ -7,7 +7,18 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
-### 2025-05 — Code Quality & Type Traits
+### 2025-05 — FSM Improvements, Multipart & mbedTLS
+
+- **fix(app)**: `Service::Deinit()` now called before stopping infrastructure — services can safely perform network cleanup (e.g. WebSocket close handshake) in `Deinit()`
+- **feat(fsm)**: enrich `HistoryEntry` with human-readable names (`from_name`, `to_name`, `event_name`) + `DumpHistory()` for formatted output
+- **fix(fsm)**: resolve thread-safety issues — `recursive_mutex`, `GetHistory()` returns by value, add `SetRecordFailedEvents(bool)`
+- **refactor(fsm)**: optimize FSM — `RegisterEvent`/`GetEventName` API, deque-based history, improved `ToDotGraph`, deprecated wrappers moved to `fsm_compat.h`
+- **fix(bt)**: Retry decorator now correctly propagates Running status without consuming attempts
+- **feat(net)**: add `MultipartParser` for parsing multipart/form-data bodies + lazy `GetMultipartFields()`/`GetMultipartFiles()` on `HttpRequestContext`
+- **feat(net)**: add `HttpServerConnection::SendFileStreaming()` for chunked file delivery
+- **feat(net)**: add mbedTLS transport backend with `TLS_BACKEND` cmake option (replaces `USE_OPENSSL`/`USE_MBEDTLS` dual options)
+
+### 2025-05 (early) — Code Quality & Type Traits
 
 - **fix(type_traits)**: add `type_name_cstr` for printf-safe usage
 - **feat(bt)**: add structured `BtLogger` for offline and online analysis (CompositeLogger, FileLogger, InspectLogger)
@@ -82,6 +93,8 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 | When | What | Migration |
 |------|------|-----------|
+| 2025-05 | `USE_OPENSSL`/`USE_MBEDTLS` → `TLS_BACKEND` | Use `TLS_BACKEND=openssl` or `TLS_BACKEND=mbedtls`; legacy `USE_MBEDTLS=ON` still works |
+| 2025-05 | `FSM::GetHistory()` returns by value | Update code that held const reference to history |
 | 2025-05 | All public APIs renamed to PascalCase | Use new names; old snake_case still works but emits deprecation warnings |
 | 2025-03 | `PostTask`/`PostAsyncTask` → `Spawn`/`SpawnAsync` on App | Use new names |
 | 2025-01 | BT node interface changed to `OnTick`/`OnStart`/`OnStop` | Override new virtual methods |
