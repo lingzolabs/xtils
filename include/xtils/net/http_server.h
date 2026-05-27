@@ -16,6 +16,13 @@
 #include "xtils/utils/string_view.h"
 
 namespace xtils {
+
+struct HttpServerConfig {
+  // Maximum HTTP request payload size (body). Connections exceeding this
+  // will receive a 413 Payload Too Large response.
+  size_t max_payload_size = 4 * 1024 * 1024;  // 4 MB
+};
+
 class HttpServerConnection;
 
 // Represents an HTTP request.
@@ -74,8 +81,10 @@ class HttpServerConnection {
  public:
   static constexpr size_t kOmitContentLength = static_cast<size_t>(-1);
 
-  explicit HttpServerConnection(std::unique_ptr<UnixSocket>);
+  HttpServerConnection(std::unique_ptr<UnixSocket>, size_t max_request_size);
   ~HttpServerConnection();
+
+  size_t max_request_size() const { return max_request_size_; }
 
   void Close();
 
@@ -126,6 +135,7 @@ class HttpServerConnection {
 
   size_t rxbuf_avail() { return rxbuf.size() - rxbuf_used; }
 
+  size_t max_request_size_;
   std::unique_ptr<UnixSocket> sock;
   PagedMemory rxbuf;
   size_t rxbuf_used = 0;
@@ -154,7 +164,8 @@ class HttpRequestHandler {
 
 class HttpServer : public UnixSocket::EventListener {
  public:
-  HttpServer(TaskRunner*, HttpRequestHandler*);
+  HttpServer(TaskRunner*, HttpRequestHandler*,
+             HttpServerConfig config = {});
   ~HttpServer() override;
   bool Start(const std::string& ip, int port);
   void Stop();
@@ -175,6 +186,7 @@ class HttpServer : public UnixSocket::EventListener {
 
   TaskRunner* const task_runner_;
   HttpRequestHandler* req_handler_;
+  HttpServerConfig config_;
   std::unique_ptr<UnixSocket> sock4_;
   std::list<HttpServerConnection> clients_;
   std::list<std::string> allowed_origins_;

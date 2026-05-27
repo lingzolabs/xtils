@@ -11,13 +11,11 @@
 
 namespace xtils {
 
-namespace {
-constexpr size_t kMaxPayloadSize = 64 * 1024 * 1024;
-constexpr size_t kMaxRequestSize = kMaxPayloadSize + 4096;
-}  // namespace
-
-HttpServer::HttpServer(TaskRunner* task_runner, HttpRequestHandler* req_handler)
-    : task_runner_(task_runner), req_handler_(req_handler) {}
+HttpServer::HttpServer(TaskRunner* task_runner, HttpRequestHandler* req_handler,
+                       HttpServerConfig config)
+    : task_runner_(task_runner),
+      req_handler_(req_handler),
+      config_(config) {}
 HttpServer::~HttpServer() { Stop(); }
 
 bool HttpServer::Start(const std::string& ip, int port) {
@@ -72,7 +70,8 @@ void HttpServer::OnNewIncomingConnection(
     return;
   }
   LogD("[HTTP] New connection");
-  clients_.emplace_back(std::move(sock));
+  clients_.emplace_back(std::move(sock),
+                        config_.max_payload_size + 4096);
 }
 
 void HttpServer::OnConnect(UnixSocket*, bool) {}
@@ -99,7 +98,7 @@ void HttpServer::OnDataAvailable(UnixSocket* sock) {
   char* rxbuf = reinterpret_cast<char*>(conn->rxbuf.Get());
   for (;;) {
     size_t avail = conn->rxbuf_avail();
-    CHECK(avail <= kMaxRequestSize);
+    CHECK(avail <= conn->max_request_size());
     if (avail == 0) {
       conn->SendResponseAndClose("413 Payload Too Large");
       return;
@@ -204,8 +203,10 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
   CHECK(buf_view.size() <= conn->rxbuf_used);
   const size_t headers_size = conn->rxbuf_used - buf_view.size();
 
-  if (body_size + headers_size >= kMaxRequestSize ||
-      body_size > kMaxPayloadSize) {
+  const size_t max_request_size = conn->max_request_size();
+  const size_t max_payload_size = max_request_size - 4096;
+  if (body_size + headers_size >= max_request_size ||
+      body_size > max_payload_size) {
     conn->SendResponseAndClose("413 Payload Too Large");
     return 0;
   }
@@ -364,9 +365,10 @@ size_t HttpServer::ParseOneWebsocketFrame(HttpServerConnection* conn) {
     }
   }
 
-  if (payload_len_u64 >= kMaxPayloadSize) {
+  const size_t max_payload_size = conn->max_request_size() - 4096;
+  if (payload_len_u64 >= max_payload_size) {
     LogD("[HTTP] Websocket payload too big (%ll > %zu)", payload_len_u64,
-         kMaxPayloadSize);
+         max_payload_size);
     conn->Close();
     return 0;
   }
@@ -549,8 +551,11 @@ void HttpServerConnection::SendWebsocketFrame(WebSocketOpcode opcode,
   sock->Send(frame_data.data(), frame_data.size());
 }
 
-HttpServerConnection::HttpServerConnection(std::unique_ptr<UnixSocket> s)
-    : sock(std::move(s)), rxbuf(PagedMemory::Allocate(kMaxRequestSize)) {}
+HttpServerConnection::HttpServerConnection(std::unique_ptr<UnixSocket> s,
+                                           size_t max_request_size)
+    : max_request_size_(max_request_size),
+      sock(std::move(s)),
+      rxbuf(PagedMemory::Allocate(max_request_size)) {}
 
 HttpServerConnection::~HttpServerConnection() = default;
 
