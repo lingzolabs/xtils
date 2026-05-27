@@ -1,47 +1,183 @@
-# xtils：一个C++实用工具库
+# xtils
 
 [English](README.md)
 
-## 概览
+> **实用至上的 C++17 工具库 —— 把 Go/Python/Rust 标准库的开发体验带给 C++。**
 
-`xtils` 是一个功能全面的 C++17 实用工具库，旨在为开发者提供一套高质量、可复用的基础组件与辅助功能模块。
-该库的设计目标是提升 C++ 项目的 开发效率、可维护性与运行性能，帮助开发者更轻松地构建健壮、高效且现代化的应用程序。
+[![Build](https://github.com/lingzolabs/xtils/actions/workflows/ci.yml/badge.svg)](https://github.com/lingzolabs/xtils/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-orange.svg)](https://en.cppreference.com/w/cpp/17)
 
-## 设计理念
+10 行代码启动 HTTP 服务，日志自带滚转开箱即用，状态机即插即用 —— 同时保持 C++ 本身的性能优势。
 
-xtils 基于以下设计原则构建：
-**现代化**：全面采用 C++17 标准特性，遵循现代 C++ 编程范式。
-**高可复用性**：提供模块化的工具组件，可在不同项目中独立使用或组合扩展。
-**轻量与高性能**：在不牺牲可读性的前提下，尽可能减少运行时开销。
-**一致的接口风格**：统一的命名约定与 API 设计，便于快速上手与维护。
+## 为什么选 xtils？
 
-## 核心功能
+| | xtils | Boost | Abseil | POCO |
+|---|---|---|---|---|
+| **定位** | 实用优先，开箱即用 | 大而全但笨重 | 底层构建模块 | 框架导向 |
+| **接入成本** | 单个静态库，CMake 一行搞定 | 模块系统复杂 | 以 Bazel 为中心 | 重量级框架 |
+| **HTTP 服务** | ✅ 内置路由 | ❌ Beast 过于底层 | ❌ 不提供 | ✅ 但 API 陈旧 |
+| **日志** | ✅ 异步、滚转、分级 | ❌ Boost.Log 啰嗦 | ✅ 但功能简陋 | ✅ |
+| **状态机** | ✅ 带历史记录 + 行为树 | ❌ Boost.MSM 模板地狱 | ❌ 不提供 | ❌ |
+| **定时任务** | ✅ Cron 表达式、事件循环 | ❌ | ❌ | ❌ |
+| **上手难度** | 低 | 高 | 中 | 中 |
 
-`xtils` 旨在通过提供以下关键功能来简化 C++ 开发：
+**xtils** 的目标不是极致性能，而是在保持 C++ 性能优势的前提下，提供现代主流语言标准库级别的易用性。
 
-- **应用程序服务**：提供一个框架，用于定义和管理应用程序服务，促进模块化和清晰的职责分离。
-- **配置管理**：提供定义、加载和访问应用程序配置的机制，支持各种数据类型和分层结构。
-- **调试和追踪**：包含用于调试的实用工具，如跟踪日志和性能追踪，以帮助开发和问题解决。
-- **有限状态机 (FSM)**：提供用于实现基于状态逻辑的工具，适用于管理复杂的工作流和系统行为。
-- **日志系统**：一个灵活可定制的日志框架，用于将信息、警告和错误消息输出到各种目的地。
-- **网络工具**：包含用于处理网络通信的组件，便于创建连接的应用程序。
-- **系统交互**：提供与底层操作系统交互的抽象，例如管理线程、进程和环境变量。
-- **异步任务管理**：支持后台任务的执行和调度，实现响应迅速且非阻塞的应用程序设计。
-- **通用工具**：用于日常编程任务的常见辅助函数和类集合。
+## 快速上手
 
-## 安装
+### HTTP 服务
 
-本指南解释了如何在您自己的项目中安装和使用 `xtils` 库。
+```cpp
+#include "xtils/app/app.h"
+#include "xtils/net/http_server.h"
+#include "xtils/net/http_router.h"
 
-### 先决条件
+int main(int argc, char** argv) {
+  xtils::App app;
+  app.Init(argc, argv);
 
-- CMake 3.10 或更高版本
-- 支持 C++17 的编译器（GCC 7+、Clang 5+、MSVC 2017+）
+  auto router = std::make_unique<xtils::HttpRouter>();
+  router->Get("/hello", [](const xtils::HttpRequestContext& ctx,
+                            xtils::HttpResponse& resp) {
+    resp.Json(R"({"message": "Hello, World!"})");
+  });
 
-### 构建和安装步骤
+  auto handler = std::make_unique<xtils::RouterHttpRequestHandler>(std::move(router));
+  xtils::HttpServer server(app.task_runner(), handler.get());
+  server.Start("0.0.0.0", 8080);
+  app.Run();
+}
+```
 
-[INSTALL.md](./INSTALL.md)
+### 日志
+
+```cpp
+#include "xtils/logging/logger.h"
+// App::Init() 之后日志即可使用，无需额外配置
+LogI("Server started on port %d", 8080);
+LogE("Connection failed: %s", error.c_str());
+```
+
+### 定时任务
+
+```cpp
+xtils::CronScheduler scheduler;
+scheduler.AddTask("*/5 * * * * *", []() {  // 每 5 秒执行
+  LogI("Heartbeat check");
+});
+scheduler.Start();
+```
+
+### 行为树（JSON 驱动）
+
+用 JSON 定义行为树，注册自定义动作节点，即可运行：
+
+```cpp
+// 注册自定义动作节点
+xtils::BtFactory factory;
+factory.Register<PatrolAction>("Patrol");
+factory.Register<AttackAction>("Attack");
+
+// 从 JSON 文件加载行为树
+factory.LoadTreeFile("trees/main.json");
+auto tree = factory.buildFromRegisteredTree("main");
+
+// 在主循环中 tick（如游戏循环、机器人控制循环）
+while (running) {
+  tree->tick();
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+```
+
+树的 JSON 描述示例：
+```json
+{
+  "name": "main",
+  "root": {
+    "name": "Selector",
+    "children": [
+      { "name": "Patrol" },
+      { "name": "SubTree", "ports": { "tree_name": "recovery" } }
+    ]
+  }
+}
+```
+
+内置节点：Sequence、Selector、Inverter、Repeater、Delay、SubTree、WaitForEvent、EventGuard 等。
+
+### 轻量级 JSON
+
+零依赖的 JSON 解析/序列化，无需引入第三方头文件：
+
+```cpp
+#include "xtils/utils/json.h"
+
+// 解析
+auto json = xtils::Json::parse(R"({"name": "xtils", "version": 2})");
+std::string name = json->get_string("name").value();  // "xtils"
+int64_t ver = json->get_integer("version").value();   // 2
+
+// 构建
+xtils::Json obj;
+obj["status"] = "ok";
+obj["items"] = xtils::Json::array_t{1, 2, 3};
+std::string output = obj.dump(2);  // 2 空格缩进美化输出
+```
+
+## 模块一览
+
+| 模块 | 说明 |
+|------|------|
+| **App** | 应用生命周期管理、服务编排、配置集成 |
+| **Config** | 命令行参数 + JSON 配置文件，支持类型安全访问 |
+| **Logging** | 异步日志，控制台 + 文件输出，按大小滚转，看门狗（内存/CPU 守护） |
+| **Net / HTTP** | HTTP Server（路由、CORS、WebSocket 升级、文件流），HTTP Client（同步/异步、multipart、重定向、Cookie、SSL） |
+| **Net / WebSocket** | WebSocket Client，自动重连，ping/pong 心跳 |
+| **Net / TCP & UDP** | TCP Client/Server，UDP Client/Server，组播支持 |
+| **Net / TLS** | 支持 OpenSSL 与 mbedTLS 双后端 |
+| **FSM** | 有限状态机，支持状态历史记录 |
+| **Tasks** | TaskRunner（事件循环）、ThreadTaskRunner、CronScheduler（Cron 表达式）、Timer、TaskGroup、Event |
+| **System** | 信号处理、PagedMemory（mmap + guard pages）、Unix Socket、EventFd、平台抽象 |
+| **行为树** | JSON 驱动的行为树引擎：Sequence、Selector、Decorator、SubTree、事件系统、黑板通信、JSONL 日志记录 |
+| **Utils** | 轻量级 JSON（零依赖解析/序列化）、Base64、SHA1、文件工具、字符串工具、字节读写器、时间工具、线程安全容器、ScopedGuard |
+
+## 构建
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+带测试和示例：
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON
+cmake --build build
+cd build && ctest --output-on-failure
+```
+
+详细安装与集成说明见 [INSTALL.md](INSTALL.md)。
+
+### CMake 集成
+
+```cmake
+find_package(xtils REQUIRED)
+target_link_libraries(your_target PRIVATE xtils::xtils)
+```
+
+### 依赖
+
+- C++17 编译器（GCC 7+、Clang 5+、MSVC 2017+）
+- CMake ≥ 3.10
+- OpenSSL 或 mbedTLS（TLS 功能需要）
+
+## 文档
+
+- [架构设计](docs/architecture.md)
+- [API 参考](docs/api-reference.md)
+- [更新日志](docs/CHANGELOG.md)
 
 ## 许可证
 
-本项目基于 [MIT 许可证](./LICENSE) 开源。
+[MIT](LICENSE) © Albert Lv
