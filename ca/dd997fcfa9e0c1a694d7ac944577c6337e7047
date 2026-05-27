@@ -1,0 +1,21 @@
+README_zh.md
+  s_1fcbf719542315::t_81b2352a02d237 7
+README.md
+  s_1fcbf719542315::t_3f455a30710f96 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "cadd997fcfa9e0c1a694d7ac944577c6337e7047",
+  "prompts": {},
+  "sessions": {
+    "s_1fcbf719542315": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019e63d0-9d9d-780e-a6f7-423437ce0188",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Albert Lv <altair.albert@gmail.com>"
+    }
+  }
+}
