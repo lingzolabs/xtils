@@ -68,7 +68,7 @@ inline int MkSockFamily(SockFamily family) {
     case SockFamily::kUnspec:
       return AF_UNSPEC;
   }
-  CHECK(false);  // For GCC.
+  XTILS_CHECK(false);  // For GCC.
   return 0;
 }
 
@@ -86,7 +86,7 @@ inline int MkSockType(SockType type) {
     case SockType::kSeqPacket:
       return SOCK_SEQPACKET | kSockCloExec;
   }
-  CHECK(false);  // For GCC.
+  XTILS_CHECK(false);  // For GCC.
   return 0;
 }
 
@@ -111,12 +111,12 @@ SockaddrAny MakeSockAddr(SockFamily family, const std::string& socket_name) {
       // instead mandatory for filesystem sockets). Any byte up to `size`,
       // including '\0' will become part of the socket name.
       if (saddr.sun_path[0] == '\0') --size;
-      // CHECK(static_cast<size_t>(size) <= sizeof(saddr));
+      // XTILS_CHECK(static_cast<size_t>(size) <= sizeof(saddr));
       return SockaddrAny(&saddr, size);
     }
     case SockFamily::kInet: {
       auto parts = SplitString(socket_name, ":");
-      // CHECK(parts.size() == 2);
+      // XTILS_CHECK(parts.size() == 2);
       struct addrinfo* addr_info = nullptr;
       struct addrinfo hints{};
       hints.ai_family = AF_INET;
@@ -133,11 +133,11 @@ SockaddrAny MakeSockAddr(SockFamily family, const std::string& socket_name) {
     }
     case SockFamily::kInet6: {
       auto parts = SplitString(socket_name, "]");
-      // CHECK(parts.size() == 2);
+      // XTILS_CHECK(parts.size() == 2);
       auto address = SplitString(parts[0], "[");
-      // CHECK(address.size() == 1);
+      // XTILS_CHECK(address.size() == 1);
       auto port = SplitString(parts[1], ":");
-      // CHECK(port.size() == 1);
+      // XTILS_CHECK(port.size() == 1);
       struct addrinfo* addr_info = nullptr;
       struct addrinfo hints{};
       hints.ai_family = AF_INET6;
@@ -156,7 +156,7 @@ SockaddrAny MakeSockAddr(SockFamily family, const std::string& socket_name) {
       errno = ENOTSOCK;
       return SockaddrAny();
   }
-  CHECK(false);  // For GCC.
+  XTILS_CHECK(false);  // For GCC.
   return SockaddrAny();
 }
 
@@ -201,7 +201,7 @@ void UnixSocketRaw::ShiftMsgHdrPosix(size_t n, struct msghdr* msg) {
     n -= vec->iov_len;
   }
   // We sent all the iovecs.
-  // CHECK(n == 0);
+  // XTILS_CHECK(n == 0);
   msg->msg_iovlen = 0;
   msg->msg_iov = nullptr;
 }
@@ -236,7 +236,7 @@ UnixSocketRaw::UnixSocketRaw(ScopedSocketHandle fd, SockFamily family,
     int flag = 1;
     // The reinterpret_cast<const char*> is needed for Windows, where the 4th
     // arg is a const char* (on other POSIX system is a const void*).
-    CHECK(!setsockopt(*fd_, SOL_SOCKET, SO_REUSEADDR,
+    XTILS_CHECK(!setsockopt(*fd_, SOL_SOCKET, SO_REUSEADDR,
                       reinterpret_cast<const char*>(&flag), sizeof(flag)));
     // Disable Nagle's algorithm, optimize for low-latency.
     // See https://github.com/google/perfetto/issues/70.
@@ -250,7 +250,7 @@ UnixSocketRaw::UnixSocketRaw(ScopedSocketHandle fd, SockFamily family,
 }
 
 void UnixSocketRaw::SetBlocking(bool is_blocking) {
-  // DCHECK(fd_);
+  // XTILS_DCHECK(fd_);
   int flags = fcntl(*fd_, F_GETFL, 0);
   if (!is_blocking) {
     flags |= O_NONBLOCK;
@@ -258,11 +258,11 @@ void UnixSocketRaw::SetBlocking(bool is_blocking) {
     flags &= ~static_cast<int>(O_NONBLOCK);
   }
   int fcntl_res = fcntl(*fd_, F_SETFL, flags);
-  // CHECK(fcntl_res == 0);
+  // XTILS_CHECK(fcntl_res == 0);
 }
 
 void UnixSocketRaw::SetRetainOnExec(bool retain) {
-  // DCHECK(fd_);
+  // XTILS_DCHECK(fd_);
   int flags = fcntl(*fd_, F_GETFD, 0);
   if (retain) {
     flags &= ~static_cast<int>(FD_CLOEXEC);
@@ -270,17 +270,17 @@ void UnixSocketRaw::SetRetainOnExec(bool retain) {
     flags |= FD_CLOEXEC;
   }
   int fcntl_res = fcntl(*fd_, F_SETFD, flags);
-  // CHECK(fcntl_res == 0);
+  // XTILS_CHECK(fcntl_res == 0);
 }
 
 void UnixSocketRaw::DcheckIsBlocking(bool expected) const {
-  // DCHECK(fd_);
+  // XTILS_DCHECK(fd_);
   bool is_blocking = (fcntl(*fd_, F_GETFL, 0) & O_NONBLOCK) == 0;
-  // DCHECK(is_blocking == expected);
+  // XTILS_DCHECK(is_blocking == expected);
 }
 
 bool UnixSocketRaw::Bind(const std::string& socket_name) {
-  // DCHECK(fd_);
+  // XTILS_DCHECK(fd_);
   SockaddrAny addr = MakeSockAddr(family_, socket_name);
   if (addr.size == 0) return false;
 
@@ -293,14 +293,14 @@ bool UnixSocketRaw::Bind(const std::string& socket_name) {
 }
 
 bool UnixSocketRaw::Listen() {
-  // DCHECK(fd_);
-  // DCHECK(type_ == SockType::kStream || type_ ==
+  // XTILS_DCHECK(fd_);
+  // XTILS_DCHECK(type_ == SockType::kStream || type_ ==
   // SockType::kSeqPacket);
   return listen(*fd_, SOMAXCONN) == 0;
 }
 
 bool UnixSocketRaw::Connect(const std::string& socket_name) {
-  // DCHECK(fd_);
+  // XTILS_DCHECK(fd_);
   SockaddrAny addr = MakeSockAddr(family_, socket_name);
   if (addr.size == 0) return false;
 
@@ -332,7 +332,7 @@ void UnixSocketRaw::Shutdown() {
 // [2]: https://elixir.bootlin.com/linux/v4.18.10/source/net/core/sock.c#L2101
 ssize_t UnixSocketRaw::SendMsgAllPosix(struct msghdr* msg) {
   // This does not make sense on non-blocking sockets.
-  // DCHECK(fd_);
+  // XTILS_DCHECK(fd_);
 
   const bool is_blocking_with_timeout =
       tx_timeout_ms_ > 0 && ((fcntl(*fd_, F_GETFL, 0) & O_NONBLOCK) == 0);
@@ -341,7 +341,7 @@ ssize_t UnixSocketRaw::SendMsgAllPosix(struct msghdr* msg) {
   // Waits until some space is available in the tx buffer.
   // Returns true if some buffer space is available, false if times out.
   auto poll_or_timeout = [&] {
-    // DCHECK(is_blocking_with_timeout);
+    // XTILS_DCHECK(is_blocking_with_timeout);
     const int64_t deadline = start_ms + tx_timeout_ms_;
     const int64_t now_ms = GetWallTimeMs().count();
     if (now_ms >= deadline) return false;  // Timed out
@@ -375,7 +375,7 @@ ssize_t UnixSocketRaw::SendMsgAllPosix(struct msghdr* msg) {
 
 ssize_t UnixSocketRaw::Send(const void* msg, size_t len, const int* send_fds,
                             size_t num_fds) {
-  DCHECK(fd_);
+  XTILS_DCHECK(fd_);
   msghdr msg_hdr = {};
   iovec iov = {const_cast<void*>(msg), len};
   msg_hdr.msg_iov = &iov;
@@ -386,7 +386,7 @@ ssize_t UnixSocketRaw::Send(const void* msg, size_t len, const int* send_fds,
     const auto raw_ctl_data_sz = num_fds * sizeof(int);
     const CBufLenType control_buf_len =
         static_cast<CBufLenType>(CMSG_SPACE(raw_ctl_data_sz));
-    CHECK(control_buf_len <= sizeof(control_buf));
+    XTILS_CHECK(control_buf_len <= sizeof(control_buf));
     memset(control_buf, 0, sizeof(control_buf));
     msg_hdr.msg_control = control_buf;
     msg_hdr.msg_controllen = control_buf_len;  // used by CMSG_FIRSTHDR
@@ -404,7 +404,7 @@ ssize_t UnixSocketRaw::Send(const void* msg, size_t len, const int* send_fds,
 
 ssize_t UnixSocketRaw::Receive(void* msg, size_t len, ScopedFile* fd_vec,
                                size_t max_files) {
-  DCHECK(fd_);
+  XTILS_DCHECK(fd_);
   msghdr msg_hdr = {};
   iovec iov = {msg, len};
   msg_hdr.msg_iov = &iov;
@@ -415,13 +415,13 @@ ssize_t UnixSocketRaw::Receive(void* msg, size_t len, ScopedFile* fd_vec,
     msg_hdr.msg_control = control_buf;
     msg_hdr.msg_controllen =
         static_cast<CBufLenType>(CMSG_SPACE(max_files * sizeof(int)));
-    CHECK(msg_hdr.msg_controllen <= sizeof(control_buf));
+    XTILS_CHECK(msg_hdr.msg_controllen <= sizeof(control_buf));
   }
   const ssize_t sz = recvmsg(*fd_, &msg_hdr, 0);
   if (sz <= 0) {
     return sz;
   }
-  CHECK(static_cast<size_t>(sz) <= len);
+  XTILS_CHECK(static_cast<size_t>(sz) <= len);
 
   int* fds = nullptr;
   uint32_t fds_len = 0;
@@ -431,8 +431,8 @@ ssize_t UnixSocketRaw::Receive(void* msg, size_t len, ScopedFile* fd_vec,
          cmsg = CMSG_NXTHDR(&msg_hdr, cmsg)) {
       const size_t payload_len = cmsg->cmsg_len - CMSG_LEN(0);
       if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
-        DCHECK(payload_len % sizeof(int) == 0u);
-        CHECK(fds == nullptr);
+        XTILS_DCHECK(payload_len % sizeof(int) == 0u);
+        XTILS_CHECK(fds == nullptr);
         fds = reinterpret_cast<int*>(CMSG_DATA(cmsg));
         fds_len = static_cast<uint32_t>(payload_len / sizeof(int));
       }
@@ -456,7 +456,7 @@ ssize_t UnixSocketRaw::Receive(void* msg, size_t len, ScopedFile* fd_vec,
 }
 
 bool UnixSocketRaw::SetTxTimeout(uint32_t timeout_ms) {
-  DCHECK(fd_);
+  XTILS_DCHECK(fd_);
   // On Unix-based systems, SO_SNDTIMEO isn't used for Send() because it's
   // unreliable (b/193234818). Instead we use non-blocking sendmsg() + poll().
   // See SendMsgAllPosix(). We still make the setsockopt call because
@@ -474,7 +474,7 @@ bool UnixSocketRaw::SetTxTimeout(uint32_t timeout_ms) {
 }
 
 bool UnixSocketRaw::SetRxTimeout(uint32_t timeout_ms) {
-  DCHECK(fd_);
+  XTILS_DCHECK(fd_);
   struct timeval timeout{};
   uint32_t timeout_sec = timeout_ms / 1000;
   timeout.tv_sec = static_cast<decltype(timeout.tv_sec)>(timeout_sec);
@@ -514,7 +514,7 @@ std::string UnixSocketRaw::GetSockAddr() const {
 
   if (stg.ss_family == AF_INET6) {
     auto* saddr = reinterpret_cast<struct sockaddr_in6*>(&stg);
-    CHECK(inet_ntop(AF_INET6, &saddr->sin6_addr, addr, sizeof(addr)));
+    XTILS_CHECK(inet_ntop(AF_INET6, &saddr->sin6_addr, addr, sizeof(addr)));
     auto port = ntohs(saddr->sin6_port);
     xtils::StackString<255> addr_and_port("[%s]:%" PRIu16, addr, port);
     return addr_and_port.ToStr();
@@ -614,10 +614,10 @@ UnixSocket::UnixSocket(EventListener* event_listener, TaskRunner* task_runner,
     }
     state_ = State::kListening;
   } else {
-    // FATAL("Unexpected adopt_state");  // Unfeasible.
+    // XTILS_FATAL("Unexpected adopt_state");  // Unfeasible.
   }
 
-  CHECK(sock_raw_);
+  XTILS_CHECK(sock_raw_);
 
   sock_raw_.SetBlocking(false);
 
@@ -645,7 +645,7 @@ UnixSocketRaw UnixSocket::ReleaseSocket() {
 
 // Called only by the Connect() static constructor.
 void UnixSocket::DoConnect(const std::string& socket_name) {
-  // DCHECK(state_ == State::kDisconnected);
+  // XTILS_DCHECK(state_ == State::kDisconnected);
 
   // This is the only thing that can gracefully fail in the ctor.
   if (!sock_raw_) return NotifyConnectionState(false);
@@ -675,7 +675,7 @@ void UnixSocket::DoConnect(const std::string& socket_name) {
 void UnixSocket::ReadPeerCredentialsPosix() {
   // Peer credentials are supported only on AF_UNIX sockets.
   if (sock_raw_.family() != SockFamily::kUnix) return;
-  CHECK(peer_cred_mode_ != SockPeerCredMode::kIgnore);
+  XTILS_CHECK(peer_cred_mode_ != SockPeerCredMode::kIgnore);
 }
 
 void UnixSocket::OnEvent() {
@@ -686,7 +686,7 @@ void UnixSocket::OnEvent() {
     return event_listener_->OnDataAvailable(this);
 
   if (state_ == State::kConnecting) {
-    // DCHECK(sock_raw_);
+    // XTILS_DCHECK(sock_raw_);
     int res = 0, sock_err = 0;
     bool is_error_opt_supported = true;
     if (is_error_opt_supported) {
@@ -785,14 +785,14 @@ size_t UnixSocket::Receive(void* msg, size_t len, ScopedFile* fd_vec,
     Shutdown(true);
     return 0;
   }
-  CHECK(static_cast<size_t>(sz) <= len);
+  XTILS_CHECK(static_cast<size_t>(sz) <= len);
   return static_cast<size_t>(sz);
 }
 
 std::string UnixSocket::ReceiveString(size_t max_length) {
   std::unique_ptr<char[]> buf(new char[max_length + 1]);
   size_t rsize = Receive(buf.get(), max_length);
-  CHECK(rsize <= max_length);
+  XTILS_CHECK(rsize <= max_length);
   buf[rsize] = '\0';
   return std::string(buf.get());
 }

@@ -74,7 +74,7 @@ ssize_t Base64Encode(const void* src, size_t src_size, char* dst,
 
     dst[wr_size++] = kEncTable[s[2] & 0x3f];
   }
-  DCHECK(wr_size == padded_dst_size);
+  XTILS_DCHECK(wr_size == padded_dst_size);
   return static_cast<ssize_t>(padded_dst_size);
 }
 
@@ -82,7 +82,7 @@ std::string Base64Encode(const void* src, size_t src_size) {
   std::string dst;
   dst.resize(Base64EncSize(src_size));
   auto res = Base64Encode(src, src_size, &dst[0], dst.size());
-  CHECK(res == static_cast<ssize_t>(dst.size()));
+  XTILS_CHECK(res == static_cast<ssize_t>(dst.size()));
   return dst;
 }
 
@@ -110,7 +110,7 @@ ssize_t Base64Decode(const char* src, size_t src_size, uint8_t* dst,
     wr_size += 3;
   }
 
-  CHECK(wr_size <= dst_size);
+  XTILS_CHECK(wr_size <= dst_size);
   wr_size -= (s[3] == kPadding ? 1 : 0) + (s[2] == kPadding ? 1 : 0);
   return static_cast<ssize_t>(wr_size);
 }
@@ -122,7 +122,7 @@ std::optional<std::string> Base64Decode(const char* src, size_t src_size) {
                           dst.size());
   if (res < 0) return std::nullopt;  // Decoding error.
 
-  CHECK(res <= static_cast<ssize_t>(dst.size()));
+  XTILS_CHECK(res <= static_cast<ssize_t>(dst.size()));
   dst.resize(static_cast<size_t>(res));
   return std::make_optional(dst);
 }

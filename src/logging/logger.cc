@@ -1,5 +1,5 @@
 /*
- * Description: Simplified logger implementation with async processing
+ * Description: Logger implementation with async processing
  *
  * Copyright (c) 2018 - 2024 Albert Lv <altair.albert@gmail.com>
  *
@@ -7,19 +7,18 @@
  * license information.
  *
  * Author: Albert Lv <altair.albert@gmail.com>
- * Version: 1.0.0
+ * Version: 2.0.0
  *
  * Changelog:
- * - Simplified implementation avoiding complex templates
- * - Async processing with simple queue
- * - Optimized time formatting and string operations
- * - Better error handling and thread safety
+ * - Atomic log level (lock-free level check)
+ * - LogEntry uses const char* for tag/file/function (no copies)
+ * - Timestamp stored as raw timespec, formatted by Formatter on worker thread
+ * - Per-sink formatting via Formatter interface
+ * - Single allocation per log message in hot path
  */
 
 #include "xtils/logging/logger.h"
 
-#include <fcntl.h>
-#include <time.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -30,164 +29,91 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <string_view>
 #include <thread>
 #include <vector>
 
-#include "xtils/debug/tracer.h"
 #include "xtils/logging/sink.h"
 
 #define MAX_LINE_LOG_SIZE (1024 * 8)
-#define DATE_BUF_SIZE 26  // yyyy-mm-dd hh:mm:ss.xxxxxx
-
-namespace {
-
-// Color codes for terminal output
-constexpr const char* RESET_COLOR = "\033[0m";
-constexpr const char* COLORS[] = {
-    "\033[37m",  // white - TRACE
-    "\033[36m",  // cyan - DEBUG
-    "\033[32m",  // green - INFO
-    "\033[33m",  // yellow - WARN
-    "\033[31m",  // red - ERROR
-};
-
-constexpr int COLOR_STR_SIZE = 5;
-
-// Thread-local time formatter for better performance
-thread_local struct {
-  char date_buffer[DATE_BUF_SIZE + 1] = {'\0'};
-  time_t last_sec = 0;
-
-  const char* format_time() {
-    struct timespec tp;
-    clock_gettime(CLOCK_REALTIME, &tp);
-
-    if (last_sec != tp.tv_sec) {
-      struct tm t;
-      localtime_r(&tp.tv_sec, &t);
-      strftime(date_buffer, DATE_BUF_SIZE, "%Y-%m-%d %H:%M:%S", &t);
-      last_sec = tp.tv_sec;
-    }
-
-    // Add milliseconds
-    snprintf(date_buffer + 19, 8, ".%06d", (int)(tp.tv_nsec / 1e3));
-    return date_buffer;
-  }
-} time_formatter;
-
-}  // namespace
 
 namespace xtils {
 namespace logger {
 
-// Simple log entry structure
-struct LogEntry {
-  std::string timestamp;
-  log_level level;
-  std::string tag;
-  std::string function_name;
-  std::string file_name;
-  int line;
-  std::string message;
-
-  LogEntry() = default;
-  LogEntry(log_level lvl, const char* t, const source_loc& loc,
-           const std::string& msg)
-      : timestamp(time_formatter.format_time()),
-        level(lvl),
-        tag(t ? t : ""),
-        function_name(loc.function_name ? loc.function_name : ""),
-        file_name(loc.file_name ? loc.file_name : ""),
-        line(loc.line),
-        message(msg) {}
-};
-
 // Logger implementation class
 class Logger::Impl {
  public:
-  explicit Impl()
-      : level_(info), shutdown_requested_(false), dropped_messages_(0) {
-    // Start worker thread
-    worker_thread_ = std::thread(&Impl::worker_thread, this);
+  Impl() : level_(info), shutdown_requested_(false), dropped_messages_(0) {
+    worker_thread_ = std::thread(&Impl::WorkerThread, this);
   }
 
-  ~Impl() { shutdown(); }
+  ~Impl() { Shutdown(); }
 
-  void setLevel(log_level level) {
-    std::lock_guard<std::mutex> lock(level_mutex_);
-    level_ = level;
+  void SetLevel(log_level level) {
+    level_.store(level, std::memory_order_release);
   }
 
-  log_level level() const {
-    std::lock_guard<std::mutex> lock(level_mutex_);
-    return level_;
+  log_level Level() const {
+    return level_.load(std::memory_order_acquire);
   }
 
-  void write_log_async(const char* tag, const source_loc& loc, log_level level,
-                       const std::string& message) {
-    if (level < this->level()) return;
-
-    LogEntry entry(level, tag, loc, message);
-
+  void WriteLogAsync(LogEntry&& entry) {
     {
       std::lock_guard<std::mutex> lock(queue_mutex_);
-      if (log_queue_.size() >= MAX_QUEUE_SIZE) {
-        dropped_messages_++;
+      if (log_queue_.size() >= kMaxQueueSize) {
+        dropped_messages_.fetch_add(1, std::memory_order_relaxed);
         return;
       }
       log_queue_.push(std::move(entry));
     }
-
     cv_.notify_one();
   }
 
-  void write_log_sync(const char* tag, const source_loc& loc, log_level level,
-                      const std::string& message) {
-    if (level < this->level()) return;
-
-    LogEntry entry(level, tag, loc, message);
-    process_log_entry(entry);
+  void WriteLogSync(LogEntry&& entry) {
+    ProcessLogEntry(entry);
   }
 
-  void write_raw(const std::string& message) {
+  void WriteRaw(std::string_view message) {
     std::lock_guard<std::mutex> lock(sinks_mutex_);
-    for (auto& sink : sinks_) {
-      if (sink) {
-        sink->write(message.c_str(), 0, message.size());
+    for (auto& se : sinks_) {
+      if (se.sink) {
+        se.sink->write(message);
       }
     }
   }
 
-  void addSink(std::unique_ptr<Sink> s) {
+  void AddSink(std::unique_ptr<Sink> sink,
+               std::unique_ptr<Formatter> formatter) {
+    if (!formatter) {
+      formatter = std::make_unique<PlainFormatter>();
+    }
     std::lock_guard<std::mutex> lock(sinks_mutex_);
-    sinks_.emplace_back(std::move(s));
+    sinks_.push_back({std::move(sink), std::move(formatter)});
   }
 
-  void flush() {
-    TRACE_SCOPE("Flushing logs");
-    // Process all remaining entries synchronously
+  void Flush() {
+    // Drain the queue
     std::queue<LogEntry> temp_queue;
     {
       std::lock_guard<std::mutex> lock(queue_mutex_);
-      temp_queue = std::move(log_queue_);
-      log_queue_ = std::queue<LogEntry>();
+      std::swap(temp_queue, log_queue_);
     }
 
     while (!temp_queue.empty()) {
-      process_log_entry(temp_queue.front());
+      ProcessLogEntry(temp_queue.front());
       temp_queue.pop();
     }
 
     // Flush all sinks
     std::lock_guard<std::mutex> lock(sinks_mutex_);
-    for (auto& sink : sinks_) {
-      if (sink) {
-        sink->flush();
+    for (auto& se : sinks_) {
+      if (se.sink) {
+        se.sink->flush();
       }
     }
   }
 
-  void shutdown() {
+  void Shutdown() {
     if (!shutdown_requested_.exchange(true)) {
       cv_.notify_all();
       if (worker_thread_.joinable()) {
@@ -196,118 +122,93 @@ class Logger::Impl {
     }
   }
 
-  size_t get_dropped_count() const { return dropped_messages_.load(); }
+  size_t GetDroppedCount() const {
+    return dropped_messages_.load(std::memory_order_relaxed);
+  }
 
  private:
-  static constexpr size_t MAX_QUEUE_SIZE = 4096;
+  static constexpr size_t kMaxQueueSize = 4096;
 
-  void worker_thread() {
+  struct SinkEntry {
+    std::unique_ptr<Sink> sink;
+    std::unique_ptr<Formatter> formatter;
+  };
+
+  void WorkerThread() {
     std::unique_lock<std::mutex> lock(queue_mutex_);
-
     while (!shutdown_requested_.load() || !log_queue_.empty()) {
       cv_.wait(lock, [this] {
         return shutdown_requested_.load() || !log_queue_.empty();
       });
-
       while (!log_queue_.empty()) {
         LogEntry entry = std::move(log_queue_.front());
         log_queue_.pop();
-
         lock.unlock();
-        process_log_entry(entry);
+        ProcessLogEntry(entry);
         lock.lock();
       }
     }
   }
 
-  void process_log_entry(const LogEntry& entry) {
-    std::string formatted_message = format_log_message(entry);
-
+  void ProcessLogEntry(const LogEntry& entry) {
     std::lock_guard<std::mutex> lock(sinks_mutex_);
     if (sinks_.empty()) {
-      auto ret = write(STDOUT_FILENO, formatted_message.c_str(),
-                       formatted_message.size());
+      // Fallback: write plain to stdout
+      PlainFormatter fmt;
+      std::string msg = fmt.Format(entry);
+      auto ret = ::write(STDOUT_FILENO, msg.data(), msg.size());
       (void)ret;
-    }
-    for (auto& sink : sinks_) {
-      if (sink) {
-        sink->write(formatted_message.c_str(), 0, formatted_message.size());
+    } else {
+      for (auto& se : sinks_) {
+        if (se.sink && se.formatter) {
+          std::string msg = se.formatter->Format(entry);
+          se.sink->write(msg);
+        }
       }
     }
   }
 
-  inline std::string format_log_message(const LogEntry& entry) {
-    bool use_color = isatty(STDOUT_FILENO);
-
-    std::string out;
-    out.reserve(entry.message.size() + 128);  // pre allocate
-
-    if (use_color) {
-      out.append(COLORS[entry.level]);
-    }
-    out.append(to_string(entry.level));
-    out.append(" ");
-    out.append(entry.timestamp);
-    out.append(" ");
-    out.append(entry.tag);
-    out.append(" ");
-    out.append(entry.file_name);
-    out.append(":");
-    out.append(std::to_string(entry.line));
-    out.append(" ");
-    out.append(entry.message);
-
-    if (use_color) {
-      out.append(RESET_COLOR);
-    }
-
-    out.append("\n");
-    return out;
-  }
-
-  mutable std::mutex level_mutex_;
-  log_level level_;
+  std::atomic<log_level> level_;
 
   std::mutex queue_mutex_;
   std::queue<LogEntry> log_queue_;
   std::condition_variable cv_;
 
   std::mutex sinks_mutex_;
-  std::vector<std::unique_ptr<Sink>> sinks_;
+  std::vector<SinkEntry> sinks_;
 
   std::atomic<bool> shutdown_requested_;
   std::thread worker_thread_;
   std::atomic<size_t> dropped_messages_;
 };
 
+// Logger public interface delegation
 Logger::Logger() : impl_(std::make_unique<Impl>()) {}
-
 Logger::~Logger() = default;
 
-void Logger::SetLevel(log_level level) { impl_->setLevel(level); }
+void Logger::SetLevel(log_level level) { impl_->SetLevel(level); }
+log_level Logger::Level() const { return impl_->Level(); }
 
-log_level Logger::Level() const { return impl_->level(); }
-
-void Logger::WriteLogAsync(const char* tag, const source_loc& loc,
-                             log_level level, const std::string& message) {
-  impl_->write_log_async(tag, loc, level, message);
+void Logger::WriteLogAsync(LogEntry&& entry) {
+  impl_->WriteLogAsync(std::move(entry));
 }
 
-void Logger::WriteLogSync(const char* tag, const source_loc& loc,
-                            log_level level, const std::string& message) {
-  impl_->write_log_sync(tag, loc, level, message);
-}
-void Logger::WriteRaw(const std::string& message) {
-  if (impl_) impl_->write_raw(message);
+void Logger::WriteLogSync(LogEntry&& entry) {
+  impl_->WriteLogSync(std::move(entry));
 }
 
-void Logger::AddSink(std::unique_ptr<Sink> s) { impl_->addSink(std::move(s)); }
+void Logger::WriteRaw(std::string_view message) {
+  if (impl_) impl_->WriteRaw(message);
+}
 
-void Logger::Flush() { impl_->flush(); }
+void Logger::AddSink(std::unique_ptr<Sink> sink,
+                     std::unique_ptr<Formatter> formatter) {
+  impl_->AddSink(std::move(sink), std::move(formatter));
+}
 
-void Logger::Shutdown() { impl_->shutdown(); }
-
-size_t Logger::GetDroppedCount() const { return impl_->get_dropped_count(); }
+void Logger::Flush() { impl_->Flush(); }
+void Logger::Shutdown() { impl_->Shutdown(); }
+size_t Logger::GetDroppedCount() const { return impl_->GetDroppedCount(); }
 
 // Global logger instance
 Logger* DefaultLogger() {
@@ -326,35 +227,51 @@ void SetLevel(Logger* logger, log_level level) {
 
 namespace xtils {
 
-// Optimized log writing function - main entry point for all logging
-void _write_log(logger::Logger* log, const char* name,
-                const logger::source_loc& lc, logger::log_level level,
+// Core log writing function — single entry point for all logging macros
+void _write_log(logger::Logger* log, const char* tag,
+                const logger::source_loc& loc, logger::log_level level,
                 const char* fmt, ...) {
   if (!log || log->Level() > level) return;
+
   constexpr size_t kBufSize = MAX_LINE_LOG_SIZE;
   constexpr const char* kSuffix = "...[truncated]";
   constexpr size_t kSuffixLen = 14;
 
-  char buf[kBufSize] = {0};
-
+  char buf[kBufSize];
   va_list args;
   va_start(args, fmt);
   int n = vsnprintf(buf, kBufSize, fmt, args);
   va_end(args);
-  if (n > static_cast<int>(kBufSize)) {
-    std::strcpy(buf + kBufSize - (kSuffixLen + 1), kSuffix);
-    n = kBufSize;
+
+  if (n >= static_cast<int>(kBufSize)) {
+    std::memcpy(buf + kBufSize - (kSuffixLen + 1), kSuffix, kSuffixLen + 1);
+    n = kBufSize - 1;
     level = logger::warn;
   } else if (n < 0) {
-    std::strcpy(buf, "[format error]");
-    n = kSuffixLen;
+    std::memcpy(buf, "[format error]", 15);
+    n = 14;
     level = logger::warn;
   }
-  // Use async logging for better performance, except for info and above
-  if (level > logger::info) {
-    log->WriteLogSync(name, lc, level, std::string(buf, n));
+
+  // Build LogEntry with minimal allocations:
+  // - timestamp: raw timespec (no formatting, no allocation)
+  // - tag/file/function: const char* from literals (no allocation)
+  // - message: single std::string allocation
+  logger::LogEntry entry;
+  clock_gettime(CLOCK_REALTIME, &entry.timestamp);
+  entry.level = level;
+  entry.tag = tag;
+  entry.file_name = loc.file_name;
+  entry.function_name = loc.function_name;
+  entry.line = loc.line;
+  entry.message.assign(buf, static_cast<size_t>(n));
+
+  // Sync path for warn/error (ensures critical messages are written before
+  // potential crash); async path for trace/debug/info (better throughput)
+  if (level >= logger::warn) {
+    log->WriteLogSync(std::move(entry));
   } else {
-    log->WriteLogAsync(name, lc, level, std::string(buf, n));
+    log->WriteLogAsync(std::move(entry));
   }
 }
 

@@ -689,35 +689,35 @@ void Inspect::Stop() {
 }
 
 bool Inspect::IsRunning() const {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   return impl_->IsRunning();
 }
 
 void Inspect::Route(const std::string& path, Handler handler) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   impl_->RegisterHandler(path, "", handler, false);
 }
 
 void Inspect::Route(const std::string& path, const std::string& description,
                     Handler handler) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   impl_->RegisterHandler(path, description, handler, false);
 }
 
 void Inspect::WebSocket(const std::string& path, Handler handler) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   impl_->RegisterHandler(path, "", handler, true);
 }
 
 void Inspect::WebSocket(const std::string& path, const std::string& description,
                         Handler handler) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   impl_->RegisterHandler(path, description, handler, true);
 }
 
 void Inspect::Static(const std::string& path, const std::string& content,
                      const std::string& content_type) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   impl_->RegisterHandler(
       path, "Static content",
       [content, content_type](const Request&, Response& resp) {
@@ -727,40 +727,40 @@ void Inspect::Static(const std::string& path, const std::string& content,
 }
 
 void Inspect::Unregister(const std::string& path) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   impl_->UnregisterHandler(path);
 }
 
 bool Inspect::HasRoute(const std::string& path) const {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   return impl_->HasHandler(path);
 }
 
 size_t Inspect::Publish(const std::string& url, const std::string& message,
                         bool is_text) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   return impl_->PublishEvent(url, message, is_text);
 }
 
 size_t Inspect::Publish(const std::string& url, const xtils::Json& json) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   return impl_->PublishEvent(url, json.dump(), true);
 }
 
 Inspect::PublishResult Inspect::PublishWithResult(const std::string& url,
                                                   const std::string& message,
                                                   bool is_text) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   return impl_->PublishEventWithResult(url, message, is_text);
 }
 
 bool Inspect::HasSubscribers(const std::string& url) const {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   return impl_->HasEventSubscribers(url);
 }
 
 size_t Inspect::GetSubscriberCount(const std::string& url) const {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   return impl_->GetEventSubscriberCount(url);
 }
 
@@ -793,12 +793,12 @@ Inspect::Response Inspect::Success(const std::string& message) {
 xtils::Json Inspect::GetServerInfo() const { return impl_->GetServerInfo(); }
 
 void Inspect::SetCORS(const std::string& allow_origin) {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   impl_->SetCORS(allow_origin);
 }
 
 std::vector<std::string> Inspect::GetRoutes() const {
-  CHECK(impl_ != nullptr);
+  XTILS_CHECK(impl_ != nullptr);
   return impl_->GetHandlerPaths();
 }
 

@@ -7,16 +7,20 @@
  * license information.
  *
  * Author: Albert Lv <altair.albert@gmail.com>
- * Version: 1.0.0
+ * Version: 2.0.0
  *
  * Changelog:
- * - Simplified header with only essential declarations
- * - Fixed move semantics for better performance
- * - Optimized macro definitions
+ * - Atomic log level (no mutex overhead for level checks)
+ * - LogEntry uses const char* for literals (zero-copy)
+ * - Renamed CHECK/DCHECK/FATAL to XTILS_ prefix (opt-in short names)
+ * - Removed deprecated wrappers
+ * - Removed global namespace alias
+ * - Per-sink formatting via Formatter interface
  */
 
 #pragma once
 
+#include <ctime>
 #include <memory>
 #include <string>
 
@@ -34,18 +38,27 @@ struct source_loc {
   int line;
   const char* function_name;
 
-  source_loc() : file_name(""), line(0), function_name("") {}
-  source_loc(const char* f, int l, const char* func)
+  constexpr source_loc() : file_name(""), line(0), function_name("") {}
+  constexpr source_loc(const char* f, int l, const char* func)
       : file_name(f), line(l), function_name(func) {}
 };
-
-enum log_level { trace = 0, debug = 1, info = 2, warn = 3, error = 4, max };
 
 constexpr const char* level_name[] = {"T", "D", "I", "W", "E"};
 static_assert(log_level::max == sizeof(level_name) / sizeof(level_name[0]),
               "log_level::max need equal sizeof(level_name)");
 
 constexpr const char* to_string(log_level level) { return level_name[level]; }
+
+// Log entry — minimal allocations, const char* for compile-time literals
+struct LogEntry {
+  struct timespec timestamp;
+  log_level level;
+  const char* tag;            // from LOG_TAG_STRING (string literal)
+  const char* file_name;      // from __FILE__ (string literal)
+  const char* function_name;  // from __FUNCTION__ (string literal)
+  int line;
+  std::string message;        // formatted printf result (1 allocation)
+};
 
 // Logger class with async processing
 class Logger {
@@ -61,45 +74,19 @@ class Logger {
   log_level Level() const;
 
   // Core logging functions
-  void WriteLogAsync(const char* tag, const source_loc& loc, log_level level,
-                     const std::string& message);
-  void WriteLogSync(const char* tag, const source_loc& loc, log_level level,
-                    const std::string& message);
-  void WriteRaw(const std::string& message);
+  void WriteLogAsync(LogEntry&& entry);
+  void WriteLogSync(LogEntry&& entry);
+  void WriteRaw(std::string_view message);
 
-  void AddSink(std::unique_ptr<Sink> s);
+  // Add a sink with optional formatter (defaults to PlainFormatter)
+  void AddSink(std::unique_ptr<Sink> sink,
+               std::unique_ptr<Formatter> formatter = nullptr);
 
   void Flush();
   void Shutdown();
 
   // Statistics
   size_t GetDroppedCount() const;
-
-  // Deprecated wrappers
-  [[deprecated("Use SetLevel() instead")]]
-  void setLevel(log_level level) { SetLevel(level); }
-  [[deprecated("Use Level() instead")]]
-  log_level level() const { return Level(); }
-  [[deprecated("Use WriteLogAsync() instead")]]
-  void write_log_async(const char* tag, const source_loc& loc, log_level level,
-                       const std::string& message) {
-    WriteLogAsync(tag, loc, level, message);
-  }
-  [[deprecated("Use WriteLogSync() instead")]]
-  void write_log_sync(const char* tag, const source_loc& loc, log_level level,
-                      const std::string& message) {
-    WriteLogSync(tag, loc, level, message);
-  }
-  [[deprecated("Use WriteRaw() instead")]]
-  void write_raw(const std::string& message) { WriteRaw(message); }
-  [[deprecated("Use AddSink() instead")]]
-  void addSink(std::unique_ptr<Sink> s) { AddSink(std::move(s)); }
-  [[deprecated("Use Flush() instead")]]
-  void flush() { Flush(); }
-  [[deprecated("Use Shutdown() instead")]]
-  void shutdown() { Shutdown(); }
-  [[deprecated("Use GetDroppedCount() instead")]]
-  size_t get_dropped_count() const { return GetDroppedCount(); }
 
  private:
   class Impl;
@@ -110,17 +97,11 @@ class Logger {
 Logger* DefaultLogger();
 void SetLevel(Logger* logger, log_level level);
 
-// Deprecated wrappers
-[[deprecated("Use DefaultLogger() instead")]]
-inline Logger* default_logger() { return DefaultLogger(); }
-[[deprecated("Use SetLevel() instead")]]
-inline void set_level(Logger* logger, log_level level) { SetLevel(logger, level); }
-
 }  // namespace logger
 }  // namespace xtils
 
-// Optimized filename extraction at compile time
-constexpr const char* get_filename(const char* path) {
+// Compile-time filename extraction
+constexpr const char* xtils_get_filename(const char* path) {
   const char* last_slash = path;
   for (const char* p = path; *p; ++p) {
     if (*p == '/' || *p == '\\') {
@@ -133,60 +114,103 @@ constexpr const char* get_filename(const char* path) {
 namespace xtils {
 
 // Core logging function - implemented in logger.cc
-void _write_log(logger::Logger* log, const char* name,
-                const logger::source_loc& lc, logger::log_level level,
+void _write_log(logger::Logger* log, const char* tag,
+                const logger::source_loc& loc, logger::log_level level,
                 const char* fmt, ...);
 
 }  // namespace xtils
 
-// Optimized macro definitions
-#define __SOURCE_NAME__ (get_filename(__FILE__))
-#define __SOURCE_LOC__ \
-  (xtils::logger::source_loc{__SOURCE_NAME__, __LINE__, __FUNCTION__})
-#define __LOG(logger, level, ...) \
-  xtils::_write_log(logger, LOG_TAG_STRING, __SOURCE_LOC__, level, __VA_ARGS__)
+// Internal macros
+#define __XTILS_SOURCE_NAME__ (xtils_get_filename(__FILE__))
+#define __XTILS_SOURCE_LOC__ \
+  (xtils::logger::source_loc{__XTILS_SOURCE_NAME__, __LINE__, __FUNCTION__})
+#define __XTILS_LOG(logger, level, ...) \
+  xtils::_write_log(logger, LOG_TAG_STRING, __XTILS_SOURCE_LOC__, level, \
+                    __VA_ARGS__)
 
-// Conditional trace logging for debug builds
+// ============================================================================
+// Instance-level macros (XTILS_ prefixed)
+// ============================================================================
+
 #ifdef ENABLE_TRACE_LOGGING
-#define TRACE(logger, ...) __LOG(logger, xtils::logger::trace, __VA_ARGS__)
-#define LogT(...) __LOG(xtils::logger::DefaultLogger(), xtils::logger::trace, __VA_ARGS__)
+#define XTILS_LOG_T(logger, ...) \
+  __XTILS_LOG(logger, xtils::logger::trace, __VA_ARGS__)
 #else
-#define TRACE(logger, ...)
+#define XTILS_LOG_T(logger, ...)
+#endif
+
+#define XTILS_LOG_D(logger, ...) \
+  __XTILS_LOG(logger, xtils::logger::debug, __VA_ARGS__)
+#define XTILS_LOG_I(logger, ...) \
+  __XTILS_LOG(logger, xtils::logger::info, __VA_ARGS__)
+#define XTILS_LOG_W(logger, ...) \
+  __XTILS_LOG(logger, xtils::logger::warn, __VA_ARGS__)
+#define XTILS_LOG_E(logger, ...) \
+  __XTILS_LOG(logger, xtils::logger::error, __VA_ARGS__)
+
+// ============================================================================
+// Convenience macros using default logger (kept as-is for ergonomics)
+// ============================================================================
+
+#ifdef ENABLE_TRACE_LOGGING
+#define LogT(...) \
+  __XTILS_LOG(xtils::logger::DefaultLogger(), xtils::logger::trace, __VA_ARGS__)
+#else
 #define LogT(...)
 #endif
 
-// Standard logging macros
-#define DEBUG(logger, ...) __LOG(logger, xtils::logger::debug, __VA_ARGS__)
-#define INFO(logger, ...) __LOG(logger, xtils::logger::info, __VA_ARGS__)
-#define WARN(logger, ...) __LOG(logger, xtils::logger::warn, __VA_ARGS__)
-#define ERROR(logger, ...) __LOG(logger, xtils::logger::error, __VA_ARGS__)
-
-// Convenience macros using default logger
-#define LogD(...) __LOG(xtils::logger::DefaultLogger(), xtils::logger::debug, __VA_ARGS__)
-#define LogI(...) __LOG(xtils::logger::DefaultLogger(), xtils::logger::info, __VA_ARGS__)
-#define LogW(...) __LOG(xtils::logger::DefaultLogger(), xtils::logger::warn, __VA_ARGS__)
-#define LogE(...) __LOG(xtils::logger::DefaultLogger(), xtils::logger::error, __VA_ARGS__)
+#define LogD(...) \
+  __XTILS_LOG(xtils::logger::DefaultLogger(), xtils::logger::debug, __VA_ARGS__)
+#define LogI(...) \
+  __XTILS_LOG(xtils::logger::DefaultLogger(), xtils::logger::info, __VA_ARGS__)
+#define LogW(...) \
+  __XTILS_LOG(xtils::logger::DefaultLogger(), xtils::logger::warn, __VA_ARGS__)
+#define LogE(...) \
+  __XTILS_LOG(xtils::logger::DefaultLogger(), xtils::logger::error, __VA_ARGS__)
 
 // Special purpose macros
 #define LogTodo() LogW("======>> TODO <<=====")
 #define LogThis() LogI("======>> THIS <<=====")
 
-// Assertion and fatal error macros
-#define CHECK(expr)                    \
-  do {                                 \
-    if (!(expr)) {                     \
-      LogE("Assert -- " #expr " -- "); \
-      abort();                         \
-    }                                  \
+// ============================================================================
+// Assertion and fatal error macros (XTILS_ prefixed)
+// ============================================================================
+
+#define XTILS_CHECK(expr)                    \
+  do {                                       \
+    if (!(expr)) {                           \
+      LogE("Assert -- " #expr " -- ");       \
+      abort();                               \
+    }                                        \
   } while (0)
 
-#define DCHECK(expr) CHECK(expr)
+#define XTILS_DCHECK(expr) XTILS_CHECK(expr)
 
-#define FATAL(x, ...)       \
-  do {                      \
-    LogW(x, ##__VA_ARGS__); \
-    abort();                \
-  } while (0);
+#define XTILS_FATAL(x, ...)       \
+  do {                            \
+    LogE(x, ##__VA_ARGS__);       \
+    abort();                      \
+  } while (0)
 
-// Backward compatibility: allow `logger::xxx` to resolve to `xtils::logger::xxx`
-namespace logger = xtils::logger;
+// ============================================================================
+// Opt-in short macro names (define XTILS_LOG_SHORT_MACROS before including)
+// ============================================================================
+
+#ifdef XTILS_LOG_SHORT_MACROS
+
+#ifdef ENABLE_TRACE_LOGGING
+#define TRACE(logger, ...) XTILS_LOG_T(logger, __VA_ARGS__)
+#else
+#define TRACE(logger, ...)
+#endif
+
+#define DEBUG(logger, ...) XTILS_LOG_D(logger, __VA_ARGS__)
+#define INFO(logger, ...) XTILS_LOG_I(logger, __VA_ARGS__)
+#define WARN(logger, ...) XTILS_LOG_W(logger, __VA_ARGS__)
+#define ERROR(logger, ...) XTILS_LOG_E(logger, __VA_ARGS__)
+
+#define CHECK(expr) XTILS_CHECK(expr)
+#define DCHECK(expr) XTILS_DCHECK(expr)
+#define FATAL(x, ...) XTILS_FATAL(x, ##__VA_ARGS__)
+
+#endif  // XTILS_LOG_SHORT_MACROS

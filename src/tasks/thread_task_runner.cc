@@ -25,10 +25,10 @@ ThreadTaskRunner& ThreadTaskRunner::operator=(ThreadTaskRunner&& other) {
 
 ThreadTaskRunner::~ThreadTaskRunner() {
   if (task_runner_) {
-    CHECK(!task_runner_->QuitCalled());
+    XTILS_CHECK(!task_runner_->QuitCalled());
     task_runner_->Quit();
 
-    DCHECK(thread_.joinable());
+    XTILS_DCHECK(thread_.joinable());
   }
   if (thread_.joinable()) thread_.join();
 }

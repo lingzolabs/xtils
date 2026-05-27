@@ -38,16 +38,16 @@ size_t GuardSize() { return GetSysPageSize(); }
 // static
 PagedMemory PagedMemory::Allocate(size_t req_size, int flags) {
   size_t rounded_up_size = RoundUpToSysPageSize(req_size);
-  CHECK(rounded_up_size >= req_size);
+  XTILS_CHECK(rounded_up_size >= req_size);
   size_t outer_size = rounded_up_size + GuardSize() * 2;
   void* ptr = mmap(nullptr, outer_size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (ptr == MAP_FAILED && (flags & kMayFail)) return PagedMemory();
-  CHECK(ptr && ptr != MAP_FAILED);
+  XTILS_CHECK(ptr && ptr != MAP_FAILED);
   char* usable_region = reinterpret_cast<char*>(ptr) + GuardSize();
   int res = mprotect(ptr, GuardSize(), PROT_NONE);
   res |= mprotect(usable_region + rounded_up_size, GuardSize(), PROT_NONE);
-  CHECK(res == 0);
+  XTILS_CHECK(res == 0);
 
   auto memory = PagedMemory(usable_region, req_size);
   return memory;
@@ -73,19 +73,19 @@ PagedMemory& PagedMemory::operator=(PagedMemory&& other) {
 
 PagedMemory::~PagedMemory() {
   if (!p_) return;
-  CHECK(size_);
+  XTILS_CHECK(size_);
   char* start = p_ - GuardSize();
   const size_t outer_size = RoundUpToSysPageSize(size_) + GuardSize() * 2;
   int res = munmap(start, outer_size);
-  CHECK(res == 0);
+  XTILS_CHECK(res == 0);
 }
 
 bool PagedMemory::AdviseDontNeed(void* p, size_t size) {
-  DCHECK(p_);
-  DCHECK(p >= p_);
-  DCHECK(static_cast<char*>(p) + size <= p_ + size_);
+  XTILS_DCHECK(p_);
+  XTILS_DCHECK(p >= p_);
+  XTILS_DCHECK(static_cast<char*>(p) + size <= p_ + size_);
   int res = madvise(p, size, MADV_DONTNEED);
-  DCHECK(res == 0);
+  XTILS_DCHECK(res == 0);
   return true;
 }
 

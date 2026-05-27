@@ -31,7 +31,7 @@ namespace xtils {
 UnixTaskRunner::UnixTaskRunner() {
   AddFileDescriptorWatch(event_.fd(), [] {
     // Not reached -- see PostFileDescriptorWatches().
-    FATAL("Should be unreachable.");
+    XTILS_FATAL("Should be unreachable.");
   });
 }
 
@@ -56,7 +56,7 @@ void UnixTaskRunner::Run() {
 
     int ret = poll(&poll_fds_[0], static_cast<nfds_t>(poll_fds_.size()),
                    poll_timeout_ms);
-    CHECK(ret >= 0);
+    XTILS_CHECK(ret >= 0);
     PostFileDescriptorWatches(0 /*ignored*/);
 
     // To avoid starvation we always interleave all types of tasks -- immediate,
@@ -145,7 +145,7 @@ void UnixTaskRunner::PostFileDescriptorWatches(uint64_t windows_wait_result) {
 
     // On UNIX systems instead, we just make the fd negative while its task is
     // pending. This makes poll(2) ignore the fd.
-    // DCHECK(poll_fds_[i].fd >= 0);
+    // XTILS_DCHECK(poll_fds_[i].fd >= 0);
     poll_fds_[i].fd = -poll_fds_[i].fd;
   }
 }
@@ -163,8 +163,8 @@ void UnixTaskRunner::RunFileDescriptorWatch(PlatformHandle fd) {
     UpdateWatchTasksLocked();
 
     size_t fd_index = watch_task.poll_fd_index;
-    DCHECK(fd_index < poll_fds_.size());
-    DCHECK(::abs(poll_fds_[fd_index].fd) == fd);
+    XTILS_DCHECK(fd_index < poll_fds_.size());
+    XTILS_DCHECK(::abs(poll_fds_[fd_index].fd) == fd);
     poll_fds_[fd_index].fd = fd;
     task = watch_task.callback;
   }
@@ -209,7 +209,7 @@ void UnixTaskRunner::AddFileDescriptorWatch(PlatformHandle fd,
                                             std::function<void()> task) {
   {
     std::lock_guard<std::mutex> lock(lock_);
-    DCHECK(!watch_tasks_.count(fd));
+    XTILS_DCHECK(!watch_tasks_.count(fd));
     WatchTask& watch_task = watch_tasks_[fd];
     watch_task.callback = std::move(task);
     watch_task.poll_fd_index = SIZE_MAX;

@@ -93,12 +93,12 @@ void HttpServer::OnDataAvailable(UnixSocket* sock) {
   HttpServerConnection* conn = nullptr;
   for (auto it = clients_.begin(); it != clients_.end() && !conn; ++it)
     conn = (it->sock.get() == sock) ? &*it : nullptr;
-  CHECK(conn);
+  XTILS_CHECK(conn);
 
   char* rxbuf = reinterpret_cast<char*>(conn->rxbuf.Get());
   for (;;) {
     size_t avail = conn->rxbuf_avail();
-    CHECK(avail <= conn->max_request_size());
+    XTILS_CHECK(avail <= conn->max_request_size());
     if (avail == 0) {
       conn->SendResponseAndClose("413 Payload Too Large");
       return;
@@ -200,7 +200,7 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
 
   // At this point |buf_view| has been stripped of the header and contains the
   // request body. We don't know yet if we have all the bytes for it or not.
-  CHECK(buf_view.size() <= conn->rxbuf_used);
+  XTILS_CHECK(buf_view.size() <= conn->rxbuf_used);
   const size_t headers_size = conn->rxbuf_used - buf_view.size();
 
   const size_t max_request_size = conn->max_request_size();
@@ -265,7 +265,7 @@ bool HttpServer::IsOriginAllowed(std::string_view origin) {
 }
 
 void HttpServerConnection::UpgradeToWebsocket(const HttpRequest& req) {
-  CHECK(req.is_websocket_handshake);
+  XTILS_CHECK(req.is_websocket_handshake);
   // |origin_allowed_| is set to the req.origin only if it's in the allowlist.
   if (origin_allowed_.empty())
     return SendResponseAndClose("403 Forbidden", {}, "Origin not allowed");
@@ -315,7 +315,7 @@ size_t HttpServer::ParseOneWebsocketFrame(HttpServerConnection* conn) {
   uint8_t* const end = rxbuf + frame_size;
 
   auto avail = [&] {
-    CHECK(rd <= end);
+    XTILS_CHECK(rd <= end);
     return static_cast<size_t>(end - rd);
   };
 
@@ -423,8 +423,8 @@ size_t HttpServer::ParseOneWebsocketFrame(HttpServerConnection* conn) {
 void HttpServerConnection::SendResponseHeaders(const char* http_code,
                                                const HttpHeaders& headers,
                                                size_t content_length) {
-  CHECK(!headers_sent_);
-  CHECK(!is_websocket_);
+  XTILS_CHECK(!headers_sent_);
+  XTILS_CHECK(!is_websocket_);
   headers_sent_ = true;
   std::vector<char> resp_hdr;
   resp_hdr.reserve(512);
@@ -472,13 +472,13 @@ void HttpServerConnection::SendResponseHeaders(const char* http_code,
 }
 
 void HttpServerConnection::SendResponseBody(const void* data, size_t len) {
-  CHECK(!is_websocket_);
+  XTILS_CHECK(!is_websocket_);
   if (data == nullptr) {
-    DCHECK(len == 0);
+    XTILS_DCHECK(len == 0);
     return;
   }
   content_len_actual_ += len;
-  CHECK(content_len_actual_ <= content_len_headers_ ||
+  XTILS_CHECK(content_len_actual_ <= content_len_headers_ ||
         content_len_headers_ == kOmitContentLength);
   sock->Send(data, len);
 }
@@ -544,7 +544,7 @@ void HttpServerConnection::SendWebsocketMessageText(const void* data,
 void HttpServerConnection::SendWebsocketFrame(WebSocketOpcode opcode,
                                               const void* payload,
                                               size_t payload_len) {
-  CHECK(is_websocket_);
+  XTILS_CHECK(is_websocket_);
 
   auto frame_data = WebSocketUtils::BuildFrame(
       opcode, payload, payload_len, true /* fin */, false /* mask */);

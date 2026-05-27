@@ -1,5 +1,5 @@
 /*
- * Description: Example demonstrating the optimized logger usage
+ * Description: Example demonstrating the logger usage
  *
  * Copyright (c) 2018 - 2024 Albert Lv <altair.albert@gmail.com>
  *
@@ -7,12 +7,7 @@
  * license information.
  *
  * Author: Albert Lv <altair.albert@gmail.com>
- * Version: 1.0.0
- *
- * Changelog:
- * - Simple example showing logger usage
- * - Performance comparison with basic timing
- * - Demonstrates async vs sync logging
+ * Version: 2.0.0
  */
 
 #include <chrono>
@@ -30,15 +25,15 @@ void basic_logging_example() {
   std::cout << "=== Basic Logging Example ===" << std::endl;
 
   // Basic logging with different levels
-  LogT("This is a trace message (only in DEBUG builds)");
+  LogT("This is a trace message (only with ENABLE_TRACE_LOGGING)");
   LogD("This is a debug message");
   LogI("This is an info message");
   LogW("This is a warning message");
   LogE("This is an error message");
 
   // Logging with custom logger instance
-  auto* logger = logger::DefaultLogger();
-  INFO(logger, "Custom logger instance message");
+  auto* logger = xtils::logger::DefaultLogger();
+  XTILS_LOG_I(logger, "Custom logger instance message");
 
   // Formatted logging
   int value = 42;
@@ -54,10 +49,10 @@ void performance_example() {
   std::cout << "\n=== Performance Example ===" << std::endl;
 
   const int NUM_MESSAGES = 10000;
-  auto* logger = logger::DefaultLogger();
+  auto* logger = xtils::logger::DefaultLogger();
 
   // Set to INFO level to avoid debug message overhead
-  logger::SetLevel(logger, logger::info);
+  xtils::logger::SetLevel(logger, xtils::logger::info);
 
   // Measure performance of async logging
   auto start = std::chrono::high_resolution_clock::now();
@@ -85,10 +80,10 @@ void performance_example() {
 void level_filtering_example() {
   std::cout << "\n=== Level Filtering Example ===" << std::endl;
 
-  auto* logger = logger::DefaultLogger();
+  auto* logger = xtils::logger::DefaultLogger();
 
   // Set to WARN level - only WARN and ERROR messages will be shown
-  logger::SetLevel(logger, logger::warn);
+  xtils::logger::SetLevel(logger, xtils::logger::warn);
   std::cout << "Set log level to WARN" << std::endl;
 
   LogD("This debug message should NOT appear");
@@ -97,7 +92,7 @@ void level_filtering_example() {
   LogE("This error message SHOULD appear");
 
   // Reset to INFO level
-  logger::SetLevel(logger, logger::info);
+  xtils::logger::SetLevel(logger, xtils::logger::info);
   std::cout << "Reset log level to info" << std::endl;
   std::string max_line(10 * 1024, 'c');
   LogI("max line %s", max_line.c_str());
@@ -138,18 +133,12 @@ void threading_example() {
 void error_handling_example() {
   std::cout << "\n=== Error Handling Example ===" << std::endl;
 
-  bool condition = false;
+  // Demonstrate assertion macros (commented out as they would abort)
+  // XTILS_CHECK(false);   // would abort
+  // XTILS_FATAL("fatal"); // would abort
 
-  // CHECK macro - logs warning but continues execution
-  CHECK(condition);
-
-  // DCHECK - same as CHECK
-  DCHECK(condition);
-
-  std::cout << "Program continued after CHECK failure" << std::endl;
-
-  // Note: FATAL macro would terminate the program, so we don't demonstrate it
   LogE("This is how you would log a fatal error without terminating");
+  std::cout << "Program continued normally" << std::endl;
 }
 
 int main() {
@@ -157,7 +146,7 @@ int main() {
   std::cout << "======================" << std::endl;
 
   // Initialize logger (happens automatically on first use)
-  auto* logger = logger::DefaultLogger();
+  auto* logger = xtils::logger::DefaultLogger();
 
   // Run various examples
   basic_logging_example();

@@ -55,7 +55,7 @@ bool ReadProcStat(int fd, ProcStat* out) {
     if (rd == 0) break;
     c_pos += static_cast<size_t>(rd);
   }
-  CHECK(c_pos < sizeof(c));
+  XTILS_CHECK(c_pos < sizeof(c));
   c[c_pos] = '\0';
 
   if (sscanf(c,
@@ -73,10 +73,10 @@ Watchdog::Watchdog(uint32_t polling_interval_ms)
 
 Watchdog::~Watchdog() {
   if (!thread_.joinable()) {
-    DCHECK(!enabled_);
+    XTILS_DCHECK(!enabled_);
     return;
   }
-  DCHECK(enabled_);
+  XTILS_DCHECK(enabled_);
   enabled_ = false;
 
   // Rearm the timer to 1ns from now. This will cause the watchdog thread to
@@ -137,15 +137,15 @@ void Watchdog::RearmTimerFd_Locked() {
   // If |timers_| is empty (it == end()) |ts.it_value| will remain
   // zero-initialized and that will disarm the timer in the call below.
   int res = timerfd_settime(*timer_fd_, TFD_TIMER_ABSTIME, &ts, nullptr);
-  DCHECK(res == 0);
+  XTILS_DCHECK(res == 0);
 }
 
 void Watchdog::Start() {
   std::lock_guard<std::mutex> guard(mutex_);
   if (thread_.joinable()) {
-    DCHECK(enabled_);
+    XTILS_DCHECK(enabled_);
   } else {
-    DCHECK(!enabled_);
+    XTILS_DCHECK(!enabled_);
     // Kick the thread to start running but only on Android or Linux.
     timer_fd_.reset(
         timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK));
@@ -164,7 +164,7 @@ void Watchdog::SetMemoryLimit(uint64_t bytes, uint32_t window_ms) {
   // Update the fields under the lock.
   std::lock_guard<std::mutex> guard(mutex_);
 
-  CHECK(IsMultipleOf(window_ms, polling_interval_ms_) || bytes == 0);
+  XTILS_CHECK(IsMultipleOf(window_ms, polling_interval_ms_) || bytes == 0);
 
   size_t size = bytes == 0 ? 0 : window_ms / polling_interval_ms_ + 1;
   memory_window_bytes_.Reset(size);
@@ -174,8 +174,8 @@ void Watchdog::SetMemoryLimit(uint64_t bytes, uint32_t window_ms) {
 void Watchdog::SetCpuLimit(uint32_t percentage, uint32_t window_ms) {
   std::lock_guard<std::mutex> guard(mutex_);
 
-  CHECK(percentage <= 100);
-  CHECK(IsMultipleOf(window_ms, polling_interval_ms_) || percentage == 0);
+  XTILS_CHECK(percentage <= 100);
+  XTILS_CHECK(IsMultipleOf(window_ms, polling_interval_ms_) || percentage == 0);
 
   size_t size = percentage == 0 ? 0 : window_ms / polling_interval_ms_ + 1;
   cpu_window_time_ticks_.Reset(size);
@@ -191,7 +191,7 @@ void Watchdog::ThreadMain() {
     return;
   }
 
-  DCHECK(timer_fd_);
+  XTILS_DCHECK(timer_fd_);
 
   constexpr uint8_t kFdCount = 1;
   struct pollfd fds[kFdCount]{};
@@ -210,7 +210,7 @@ void Watchdog::ThreadMain() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
-      FATAL("watchdog poll() failed");
+      XTILS_FATAL("watchdog poll() failed");
     }
 
     // If we get here either:
@@ -219,7 +219,7 @@ void Watchdog::ThreadMain() {
 
     uint64_t expired = 0;  // Must be exactly 8 bytes.
     auto res = read(*timer_fd_, &expired, sizeof(expired));
-    DCHECK((res < 0 && (errno == EAGAIN)) ||
+    XTILS_DCHECK((res < 0 && (errno == EAGAIN)) ||
            (res == sizeof(expired) && expired > 0));
     const auto now = GetWallTimeMs();
 
@@ -373,7 +373,7 @@ Watchdog::Timer::Timer(Watchdog* watchdog, uint32_t ms,
   timer_data_.deadline = GetWallTimeMs() + std::chrono::milliseconds(ms);
   timer_data_.thread_id = GetThreadId();
   timer_data_.crash_reason = crash_reason;
-  DCHECK(watchdog_);
+  XTILS_DCHECK(watchdog_);
   watchdog_->AddFatalTimer(timer_data_);
 }
 

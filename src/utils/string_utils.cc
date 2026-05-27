@@ -72,7 +72,7 @@ std::string Join(const std::vector<std::string>& parts,
 
 std::vector<std::string> SplitString(const std::string& text,
                                      const std::string& delimiter) {
-  CHECK(!delimiter.empty());
+  XTILS_CHECK(!delimiter.empty());
 
   std::vector<std::string> output;
   size_t start = 0;
@@ -170,7 +170,7 @@ std::string StripChars(const std::string& str, const std::string& chars,
 
 std::string ReplaceAll(std::string& str, const std::string& to_replace,
                        const std::string& replacement) {
-  CHECK(!to_replace.empty());
+  XTILS_CHECK(!to_replace.empty());
   size_t pos = 0;
   while ((pos = str.find(to_replace, pos)) != std::string::npos) {
     str.replace(pos, to_replace.length(), replacement);
@@ -278,8 +278,8 @@ size_t SprintfTrunc(char* dst, size_t dst_size, const char* fmt, ...) {
     res = dst_size - 1;
   }
 
-  DCHECK(res < dst_size);
-  DCHECK(dst[res] == '\0');
+  XTILS_DCHECK(res < dst_size);
+  XTILS_DCHECK(dst[res] == '\0');
   return res;
 }
 

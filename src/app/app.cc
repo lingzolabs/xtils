@@ -87,7 +87,7 @@ void App::Init(const std::vector<std::string> &args) {
 
   // init thread pool
   int threads_size = Conf().GetInt("xtils.threads").value_or(4);
-  CHECK(threads_size > 1);
+  XTILS_CHECK(threads_size > 1);
   async_tg_ = std::make_unique<TaskGroup>(threads_size);
   // init event manager
   em_ = std::make_unique<EventManager>(
@@ -99,7 +99,8 @@ void App::Init(const std::vector<std::string> &args) {
 void App::init_log() {
   TRACE_SCOPE("App:init_log");
   if (Conf().GetBool("xtils.log.console.enable").value_or(true)) {
-    logger::DefaultLogger()->AddSink(std::make_unique<logger::ConsoleSink>());
+    logger::DefaultLogger()->AddSink(std::make_unique<logger::ConsoleSink>(),
+                                      std::make_unique<logger::ColorFormatter>());
   }
   if (Conf().GetBool("xtils.log.file.enable").value_or(false)) {
     std::string file = Conf().GetString("xtils.log.file.name").value_or("./log/app.log");
@@ -119,7 +120,7 @@ void App::init_log() {
     }
   }
   int log_level = Conf().GetInt("xtils.log.level").value_or(1);
-  CHECK(log_level < logger::max);
+  XTILS_CHECK(log_level < logger::max);
   logger::SetLevel(logger::DefaultLogger(), (logger::log_level)log_level);
 }
 
@@ -201,7 +202,7 @@ void App::RunDaemon() {
 }
 
 void App::Run() {
-  CHECK(initialized_);
+  XTILS_CHECK(initialized_);
   if (running_) {
     LogW("App is already running");
     return;
@@ -301,14 +302,14 @@ void App::print_banner() {
 }
 
 void App::Register(std::list<std::shared_ptr<IService>> services) {
-  CHECK(!running_);
+  XTILS_CHECK(!running_);
   for (auto &p : services) {
     Register(p);
   }
 }
 
 void App::Register(std::shared_ptr<IService> p) {
-  CHECK(!running_);
+  XTILS_CHECK(!running_);
   service_.push_back(p);
 }
 

@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 #include "xtils/utils/file_utils.h"
 
@@ -27,15 +28,15 @@ TEST_CASE("ConsoleSink: write and flush") {
   ConsoleSink sink;
   const char* msg = "console_test\n";
   // Should not crash
-  sink.write(msg, 0, std::strlen(msg));
+  sink.write(std::string_view(msg, std::strlen(msg)));
   sink.flush();
 }
 
 TEST_CASE("ConsoleSink: write with offset") {
   ConsoleSink sink;
   const char* msg = "XXhello\n";
-  // Write starting at offset 2
-  sink.write(msg, 2, 6);
+  // Write starting at offset 2, length 6
+  sink.write(std::string_view(msg + 2, 6));
   sink.flush();
 }
 
@@ -49,7 +50,7 @@ TEST_CASE("FileSink: basic write") {
   {
     FileSink sink(kTempFile, 1024 * 1024, 3);
     const char* msg = "hello world";
-    sink.write(msg, 0, std::strlen(msg));
+    sink.write(std::string_view(msg, std::strlen(msg)));
     sink.flush();
   }
 
@@ -67,8 +68,8 @@ TEST_CASE("FileSink: multiple writes") {
     FileSink sink(kTempFile, 1024 * 1024, 3);
     const char* msg1 = "line1\n";
     const char* msg2 = "line2\n";
-    sink.write(msg1, 0, std::strlen(msg1));
-    sink.write(msg2, 0, std::strlen(msg2));
+    sink.write(std::string_view(msg1, std::strlen(msg1)));
+    sink.write(std::string_view(msg2, std::strlen(msg2)));
     sink.flush();
   }
 
@@ -97,7 +98,7 @@ TEST_CASE("FileSink: write with offset") {
   {
     FileSink sink(kTempFile, 1024 * 1024, 3);
     const char* msg = "XXdata";
-    sink.write(msg, 2, 4);
+    sink.write(std::string_view(msg + 2, 4));
     sink.flush();
   }
 
@@ -107,4 +108,3 @@ TEST_CASE("FileSink: write with offset") {
 
   cleanup();
 }
-
