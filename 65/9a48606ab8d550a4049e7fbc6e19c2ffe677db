@@ -1,0 +1,19 @@
+src/config/config.cc
+  s_4903f6764af515::t_3fb2a97e3cd62c 83-84,88-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "659a48606ab8d550a4049e7fbc6e19c2ffe677db",
+  "prompts": {},
+  "sessions": {
+    "s_4903f6764af515": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019e692a-342a-71f6-bfd2-8865616cecb8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Albert Lv <altair.albert@gmail.com>"
+    }
+  }
+}
