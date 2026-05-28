@@ -80,11 +80,13 @@ bool Config::ParseArgs(const std::vector<std::string>& args, bool allow_exit) {
     // Skip help flags
     if ((arg == "-h" || arg == "--help") && allow_exit) {
       std::cout << Help() << std::endl;
-      std::exit(0);
+      std::cout.flush();
+      _Exit(0);
     }
     if (arg == "--dump" && allow_exit) {
       Print();
-      std::exit(0);
+      std::cout.flush();
+      _Exit(0);
     }
 
     // Skip config-file argument as it's already processed

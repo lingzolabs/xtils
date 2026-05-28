@@ -151,12 +151,20 @@ class Json {
   void erase(const std::string& key);
   void erase(size_t index);
 
+  // Fast access without copy (returns nullptr if not found)
+  const Json* find(const std::string& key) const;
+  const Json* find(size_t index) const;
+
   // Safe optional access methods
   std::optional<Json> get(const std::string& key) const;
   std::optional<Json> get(size_t index) const;
   template <typename T>
   T get(const std::string& key) const {
-    return get(key).value().template as<T>();
+    auto val = get(key);
+    if (!val) {
+      throw std::runtime_error("Key '" + key + "' not found in Json object");
+    }
+    return val->template as<T>();
   }
 
   // Key/index existence checks

@@ -1,6 +1,8 @@
 #include "xtils/utils/json.h"
 
+#include <cstdio>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -12,24 +14,18 @@ namespace xtils {
 Json parse_value(std::istream& in, int depth = 0);
 void dump_value(const Json& json, std::string& out, int depth, int indent);
 void dump_string(const std::string& str, std::string& out);
-std::string to_string_trimmed(double value, int precision = 6) {
-  std::ostringstream out;
-  out << std::fixed << std::setprecision(precision) << value;
-  std::string s = out.str();
-  s.erase(s.find_last_not_of('0') + 1, std::string::npos);
-  if (!s.empty() && s.back() == '.') s.pop_back();
-  return s;
+std::string to_string_trimmed(double value) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%.17g", value);
+  return std::string(buf);
 }
 
 // --- Helper functions for parsing ---
 
 static const int MAX_PARSE_DEPTH = 100;
 
-bool check_stream_state(std::istream& in) {
-  if (in.eof() || in.fail() || in.bad()) {
-    return false;
-  }
-  return true;
+static inline bool check_stream_state(std::istream& in) {
+  return in.good();
 }
 
 void skip_ws(std::istream& in) {
@@ -93,16 +89,56 @@ std::string parse_string(std::istream& in, int depth) {
         }
         // Convert Unicode code point to UTF-8
         int code = std::stoi(hex, nullptr, 16);
+
+        // Handle UTF-16 surrogate pairs
+        if (code >= 0xD800 && code <= 0xDBFF) {
+          // High surrogate — expect \uDCxx low surrogate
+          if (!check_stream_state(in) || in.peek() != '\\') {
+            throw std::runtime_error(
+                "Expected low surrogate after high surrogate");
+          }
+          in.get();  // consume '\'
+          if (!check_stream_state(in) || in.peek() != 'u') {
+            throw std::runtime_error(
+                "Expected \\u after high surrogate");
+          }
+          in.get();  // consume 'u'
+          std::string hex2;
+          for (int j = 0; j < 4; j++) {
+            if (!check_stream_state(in) || !std::isxdigit(in.peek())) {
+              throw std::runtime_error(
+                  "Invalid unicode escape in low surrogate");
+            }
+            hex2 += in.get();
+          }
+          int low = std::stoi(hex2, nullptr, 16);
+          if (low < 0xDC00 || low > 0xDFFF) {
+            throw std::runtime_error("Invalid low surrogate value");
+          }
+          // Combine surrogates into code point
+          code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+        }
+
+        // Reject lone low surrogates
+        if (code >= 0xDC00 && code <= 0xDFFF) {
+          throw std::runtime_error(
+              "Unexpected low surrogate without high surrogate");
+        }
+
+        // Convert to UTF-8
         if (code <= 0x7F) {
-          // 1-byte UTF-8 (ASCII)
           result += static_cast<char>(code);
         } else if (code <= 0x7FF) {
-          // 2-byte UTF-8
           result += static_cast<char>(0xC0 | ((code >> 6) & 0x1F));
           result += static_cast<char>(0x80 | (code & 0x3F));
-        } else {
-          // 3-byte UTF-8 (covers most Unicode including Chinese)
+        } else if (code <= 0xFFFF) {
           result += static_cast<char>(0xE0 | ((code >> 12) & 0x0F));
+          result += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+          result += static_cast<char>(0x80 | (code & 0x3F));
+        } else if (code <= 0x10FFFF) {
+          // 4-byte UTF-8 for supplementary planes
+          result += static_cast<char>(0xF0 | ((code >> 18) & 0x07));
+          result += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
           result += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
           result += static_cast<char>(0x80 | (code & 0x3F));
         }
@@ -305,8 +341,17 @@ Json parse_number(std::istream& in) {
     }
   }
 
-  if (has_decimal || has_exponent) {
+  if (has_decimal) {
     return Json(std::stod(number_str));
+  } else if (has_exponent) {
+    // Scientific notation without decimal: try to store as integer if whole
+    double d = std::stod(number_str);
+    if (d == static_cast<double>(static_cast<int64_t>(d)) &&
+        d >= static_cast<double>(std::numeric_limits<int64_t>::min()) &&
+        d <= static_cast<double>(std::numeric_limits<int64_t>::max())) {
+      return Json(static_cast<int64_t>(d));
+    }
+    return Json(d);
   } else {
     return Json(std::stoll(number_str));
   }
@@ -479,9 +524,14 @@ Json& Json::operator=(Json&& other) noexcept {
 // Non-const operator[] for object access
 Json& Json::operator[](const std::string& key) {
   if (!is_object()) {
-    destroy_current_data();  // Clean up old data if type changes
-    type_ = JsonType::OBJECT;
-    data_.object_val = new object_t{};
+    if (is_null()) {
+      // Allow null → object promotion (common construction pattern)
+      type_ = JsonType::OBJECT;
+      data_.object_val = new object_t{};
+    } else {
+      throw std::runtime_error(
+          "Cannot use operator[](string) on non-object Json value");
+    }
   }
   return (*data_.object_val)[key];
 }
@@ -531,9 +581,14 @@ const Json& Json::operator[](size_t i) const {
 // Push back method for arrays
 Json& Json::push_back(const Json& value) {
   if (!is_array()) {
-    destroy_current_data();  // Clean up old data if type changes
-    type_ = JsonType::ARRAY;
-    data_.array_val = new array_t{};
+    if (is_null()) {
+      // Allow null → array promotion
+      type_ = JsonType::ARRAY;
+      data_.array_val = new array_t{};
+    } else {
+      throw std::runtime_error(
+          "Cannot use push_back on non-array Json value");
+    }
   }
   data_.array_val->push_back(value);
   return *this;
@@ -578,6 +633,19 @@ std::optional<Json> Json::get(size_t index) const {
   if (!is_array()) return std::nullopt;
   const auto& arr = *data_.array_val;
   return index < arr.size() ? std::optional<Json>(arr[index]) : std::nullopt;
+}
+
+const Json* Json::find(const std::string& key) const {
+  if (!is_object()) return nullptr;
+  const auto& obj = *data_.object_val;
+  auto it = obj.find(key);
+  return it != obj.end() ? &(it->second) : nullptr;
+}
+
+const Json* Json::find(size_t index) const {
+  if (!is_array()) return nullptr;
+  const auto& arr = *data_.array_val;
+  return index < arr.size() ? &arr[index] : nullptr;
 }
 
 // Key existence checks
@@ -734,10 +802,6 @@ void dump_string(const std::string& str, std::string& out) {
 }
 
 void dump_value(const Json& json, std::string& out, int depth, int indent) {
-  const std::string indent_str(indent * depth, ' ');
-  const std::string new_line = indent > 0 ? "\n" : "";
-  const std::string comma = indent > 0 ? ",\n" : ",";
-  const std::string colon = indent > 0 ? ": " : ":";
   if (json.is_null()) {
     out.append("null");
   } else if (json.is_bool()) {
@@ -751,39 +815,55 @@ void dump_value(const Json& json, std::string& out, int depth, int indent) {
   } else if (json.is_array()) {
     const auto& arr = json.as_array();
     out.append("[");
-    if (!arr.empty()) {
-      out.append(new_line);
+    if (!arr.empty() && indent > 0) {
+      const std::string child_indent(indent * (depth + 1), ' ');
+      const std::string close_indent(indent * depth, ' ');
+      out.append("\n");
       bool first = true;
       for (const auto& val : arr) {
-        if (!first) {
-          out.append(comma);
-        }
-        out.append(indent_str);
+        if (!first) out.append(",\n");
+        out.append(child_indent);
         dump_value(val, out, depth + 1, indent);
         first = false;
       }
-      out.append(new_line);
-      out.append(indent_str.substr(0, indent_str.size() - indent));
+      out.append("\n");
+      out.append(close_indent);
+    } else if (!arr.empty()) {
+      bool first = true;
+      for (const auto& val : arr) {
+        if (!first) out.append(",");
+        dump_value(val, out, depth + 1, indent);
+        first = false;
+      }
     }
     out.append("]");
   } else if (json.is_object()) {
     const auto& obj = json.as_object();
     out.append("{");
-    if (!obj.empty()) {
-      out.append(new_line);
+    if (!obj.empty() && indent > 0) {
+      const std::string child_indent(indent * (depth + 1), ' ');
+      const std::string close_indent(indent * depth, ' ');
+      out.append("\n");
       bool first = true;
       for (const auto& [k, v] : obj) {
-        if (!first) {
-          out.append(comma);
-        }
-        out.append(indent_str);
+        if (!first) out.append(",\n");
+        out.append(child_indent);
         dump_string(k, out);
-        out.append(colon);
+        out.append(": ");
         dump_value(v, out, depth + 1, indent);
         first = false;
       }
-      out.append(new_line);
-      out.append(indent_str.substr(0, indent_str.size() - indent));
+      out.append("\n");
+      out.append(close_indent);
+    } else if (!obj.empty()) {
+      bool first = true;
+      for (const auto& [k, v] : obj) {
+        if (!first) out.append(",");
+        dump_string(k, out);
+        out.append(":");
+        dump_value(v, out, depth + 1, indent);
+        first = false;
+      }
     }
     out.append("}");
   }
@@ -792,7 +872,7 @@ void dump_value(const Json& json, std::string& out, int depth, int indent) {
 std::string Json::dump(int indent) const {
   std::string out;
   out.reserve(1024);  // Pre-allocate some space
-  dump_value(*this, out, 1, indent);
+  dump_value(*this, out, 0, indent);
   return out;
 }
 
