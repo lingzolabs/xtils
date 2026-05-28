@@ -11,6 +11,16 @@
 
 namespace xtils {
 
+namespace detail {
+// Trait to detect std::vector<T>
+template <typename T>
+struct is_vector : std::false_type {};
+template <typename T, typename A>
+struct is_vector<std::vector<T, A>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_vector_v = is_vector<T>::value;
+}  // namespace detail
+
 class Config {
  public:
   // Option definition for command line parsing
@@ -68,6 +78,15 @@ class Config {
   std::optional<bool> GetBool(const std::string& path) const;
   std::optional<Json> Get(const std::string& path) const;
 
+  // Convenience: returns value or the Define()'d default.
+  // Throws if path has no value AND no defined default.
+  template <typename T>
+  T GetOr(const std::string& path) const;
+
+  // Convenience: returns value or explicit fallback
+  template <typename T>
+  T GetOr(const std::string& path, const T& fallback) const;
+
   // Utility methods
   bool Has(const std::string& path) const;
   void Set(const std::string& path, const Json& value);
@@ -89,83 +108,13 @@ class Config {
   void Print() const;
   auto Options() { return options_; }
 
-  // Deprecated wrappers
-  [[deprecated("Use Define() instead")]]
-  Config& define(const std::string& name, const std::string& description,
-                 const Json& default_value, bool required = false) {
-    return Define(name, description, default_value, required);
-  }
-  template <typename T>
-  [[deprecated("Use Define() instead")]]
-  Config& define(const std::string& name, const std::string& description,
-                 const T& default_value, bool required = false) {
-    return Define(name, description, default_value, required);
-  }
-  [[deprecated("Use ParseArgs() instead")]]
-  bool parse_args(int argc, const char** argv, bool allow_exit = false) {
-    return ParseArgs(argc, argv, allow_exit);
-  }
-  [[deprecated("Use ParseArgs() instead")]]
-  bool parse_args(const std::vector<std::string>& args,
-                  bool allow_exit = false) {
-    return ParseArgs(args, allow_exit);
-  }
-  [[deprecated("Use LoadFile() instead")]]
-  bool load_file(const std::string& filename) { return LoadFile(filename); }
-  [[deprecated("Use ParseJson() instead")]]
-  bool parse_json(const Json& json) { return ParseJson(json); }
-  [[deprecated("Use Parse() instead")]]
-  bool parse(const std::string& json_content) { return Parse(json_content); }
-  template <typename T>
-  [[deprecated("Use Get() instead")]]
-  std::optional<T> get(const std::string& path) const { return Get<T>(path); }
-  [[deprecated("Use GetString() instead")]]
-  std::optional<std::string> get_string(const std::string& path) const {
-    return GetString(path);
-  }
-  [[deprecated("Use GetInt() instead")]]
-  std::optional<int64_t> get_int(const std::string& path) const {
-    return GetInt(path);
-  }
-  [[deprecated("Use GetDouble() instead")]]
-  std::optional<double> get_double(const std::string& path) const {
-    return GetDouble(path);
-  }
-  [[deprecated("Use GetBool() instead")]]
-  std::optional<bool> get_bool(const std::string& path) const {
-    return GetBool(path);
-  }
-  [[deprecated("Use Get() instead")]]
-  std::optional<Json> get(const std::string& path) const { return Get(path); }
-  [[deprecated("Use Has() instead")]]
-  bool has(const std::string& path) const { return Has(path); }
-  [[deprecated("Use Set() instead")]]
-  void set(const std::string& path, const Json& value) { Set(path, value); }
-  template <typename T>
-  [[deprecated("Use Set() instead")]]
-  void set(const std::string& path, const T& value) { Set(path, value); }
-  [[deprecated("Use Validate() instead")]]
-  bool validate() const { return Validate(); }
-  [[deprecated("Use Help() instead")]]
-  std::string help() const { return Help(); }
-  [[deprecated("Use MissingRequired() instead")]]
-  std::vector<std::string> missing_required() const { return MissingRequired(); }
-  [[deprecated("Use NoParsed() instead")]]
-  std::vector<std::string> no_parsed() const { return NoParsed(); }
-  [[deprecated("Use ToString() instead")]]
-  std::string to_string() const { return ToString(); }
-  [[deprecated("Use ToJson() instead")]]
-  Json to_json() const { return ToJson(); }
-  [[deprecated("Use Save() instead")]]
-  bool save(const std::string& filename) const { return Save(filename); }
-  [[deprecated("Use Print() instead")]]
-  void print() const { Print(); }
-  [[deprecated("Use Options() instead")]]
-  auto options() { return Options(); }
+  // Deprecated wrappers (will be removed in a future version)
+#include "xtils/config/config_compat.h"
 
  private:
   std::map<std::string, Option> options_;
   Json data_;
+  bool config_loaded_ = false;
 
   // Helper methods
   std::optional<Json> parse_value(const std::string& value_str,
@@ -195,36 +144,17 @@ Json Config::to_json_value(const T& value) {
     return Json(static_cast<double>(value));
   } else if constexpr (std::is_same_v<T, bool>) {
     return Json(value);
-  } else if constexpr (std::is_same_v<T, std::vector<int64_t>>) {
+  } else if constexpr (detail::is_vector_v<T>) {
     Json::array_t arr;
-    for (const auto& val : value) arr.push_back(Json(val));
-    return Json(arr);
-  } else if constexpr (std::is_same_v<T, std::vector<double>>) {
-    Json::array_t arr;
-    for (const auto& val : value) arr.push_back(Json(val));
-    return Json(arr);
-  } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
-    Json::array_t arr;
-    for (const auto& val : value) arr.push_back(Json(val));
-    return Json(arr);
-  } else if constexpr (std::is_same_v<T, std::vector<int>>) {
-    Json::array_t arr;
-    for (const auto& val : value) arr.push_back(Json(static_cast<int64_t>(val)));
-    return Json(arr);
-  } else if constexpr (std::is_same_v<T, std::vector<float>>) {
-    Json::array_t arr;
-    for (const auto& val : value) arr.push_back(Json(static_cast<double>(val)));
+    for (const auto& val : value) {
+      arr.push_back(to_json_value(val));
+    }
     return Json(arr);
   } else {
     static_assert(std::is_same_v<T, std::string> ||
                       std::is_same_v<T, const char*> || std::is_array_v<T> ||
                       std::is_integral_v<T> || std::is_floating_point_v<T> ||
-                      std::is_same_v<T, bool> ||
-                      std::is_same_v<T, std::vector<int64_t>> ||
-                      std::is_same_v<T, std::vector<double>> ||
-                      std::is_same_v<T, std::vector<std::string>> ||
-                      std::is_same_v<T, std::vector<int>> ||
-                      std::is_same_v<T, std::vector<float>>,
+                      std::is_same_v<T, bool> || detail::is_vector_v<T>,
                   "Unsupported type for Config");
     return Json{};
   }
@@ -253,43 +183,13 @@ std::optional<T> Config::from_json_value(const Json& json_val) {
     if (json_val.is_float()) return static_cast<T>(json_val.as_float());
     if (json_val.is_integer()) return static_cast<T>(json_val.as_integer());
     return std::nullopt;
-  } else if constexpr (std::is_same_v<T, std::vector<int64_t>>) {
+  } else if constexpr (detail::is_vector_v<T>) {
     if (!json_val.is_array()) return std::nullopt;
-    std::vector<int64_t> result;
+    using ElemType = typename T::value_type;
+    T result;
     for (const auto& val : json_val.as_array()) {
-      if (val.is_integer()) result.push_back(val.as_integer());
-      else if (val.is_float()) result.push_back(static_cast<int64_t>(val.as_float()));
-    }
-    return result;
-  } else if constexpr (std::is_same_v<T, std::vector<double>>) {
-    if (!json_val.is_array()) return std::nullopt;
-    std::vector<double> result;
-    for (const auto& val : json_val.as_array()) {
-      if (val.is_float()) result.push_back(val.as_float());
-      else if (val.is_integer()) result.push_back(static_cast<double>(val.as_integer()));
-    }
-    return result;
-  } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
-    if (!json_val.is_array()) return std::nullopt;
-    std::vector<std::string> result;
-    for (const auto& val : json_val.as_array()) {
-      if (val.is_string()) result.push_back(val.as_string());
-    }
-    return result;
-  } else if constexpr (std::is_same_v<T, std::vector<int>>) {
-    if (!json_val.is_array()) return std::nullopt;
-    std::vector<int> result;
-    for (const auto& val : json_val.as_array()) {
-      if (val.is_integer()) result.push_back(static_cast<int>(val.as_integer()));
-      else if (val.is_float()) result.push_back(static_cast<int>(val.as_float()));
-    }
-    return result;
-  } else if constexpr (std::is_same_v<T, std::vector<float>>) {
-    if (!json_val.is_array()) return std::nullopt;
-    std::vector<float> result;
-    for (const auto& val : json_val.as_array()) {
-      if (val.is_float()) result.push_back(static_cast<float>(val.as_float()));
-      else if (val.is_integer()) result.push_back(static_cast<float>(val.as_integer()));
+      auto elem = from_json_value<ElemType>(val);
+      if (elem) result.push_back(*elem);
     }
     return result;
   } else if constexpr (std::is_same_v<T, Json>) {
@@ -299,11 +199,7 @@ std::optional<T> Config::from_json_value(const Json& json_val) {
         std::is_same_v<T, std::string> || std::is_same_v<T, int64_t> ||
             std::is_same_v<T, double> || std::is_same_v<T, bool> ||
             std::is_integral_v<T> || std::is_floating_point_v<T> ||
-            std::is_same_v<T, std::vector<int64_t>> ||
-            std::is_same_v<T, std::vector<double>> ||
-            std::is_same_v<T, std::vector<std::string>> ||
-            std::is_same_v<T, std::vector<int>> ||
-            std::is_same_v<T, std::vector<float>> || std::is_same_v<T, Json>,
+            detail::is_vector_v<T> || std::is_same_v<T, Json>,
         "Unsupported type for Config::get");
     return std::nullopt;
   }
@@ -328,6 +224,27 @@ Config& Config::Define(const std::string& name, const std::string& description,
 template <typename T>
 void Config::Set(const std::string& path, const T& value) {
   Set(path, to_json_value(value));
+}
+
+// GetOr with defined default
+template <typename T>
+T Config::GetOr(const std::string& path) const {
+  auto val = Get<T>(path);
+  if (val) return *val;
+  // Look up the option's default value
+  auto it = options_.find(path);
+  if (it != options_.end()) {
+    auto def = from_json_value<T>(it->second.default_value);
+    if (def) return *def;
+  }
+  throw std::runtime_error("Config::GetOr: no value and no default for '" + path + "'");
+}
+
+// GetOr with explicit fallback
+template <typename T>
+T Config::GetOr(const std::string& path, const T& fallback) const {
+  auto val = Get<T>(path);
+  return val ? *val : fallback;
 }
 
 }  // namespace xtils

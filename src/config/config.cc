@@ -3,6 +3,8 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -15,6 +17,13 @@ namespace xtils {
 static bool starts_with(const std::string& str, const std::string& prefix) {
   return str.length() >= prefix.length() &&
          str.substr(0, prefix.length()) == prefix;
+}
+
+// A flag starts with "--" or "-" followed by a non-digit
+static bool is_flag(const std::string& arg) {
+  if (arg.size() >= 2 && arg[0] == '-' && arg[1] == '-') return true;
+  if (arg.size() >= 2 && arg[0] == '-' && !std::isdigit(arg[1])) return true;
+  return false;
 }
 
 Config& Config::Define(const std::string& name, const std::string& description,
@@ -34,6 +43,8 @@ bool Config::ParseArgs(int argc, const char** argv, bool allow_exit) {
 }
 
 bool Config::ParseArgs(const std::vector<std::string>& args, bool allow_exit) {
+  if (args.empty()) return true;
+
   // First, apply default values
   apply_defaults();
   no_parsed_.clear();
@@ -41,36 +52,39 @@ bool Config::ParseArgs(const std::vector<std::string>& args, bool allow_exit) {
 
   // First pass: look for --config-file parameter
   std::string config_file;
-  for (int i = 1; i < args.size(); ++i) {  // suport mutil config file
+  for (size_t i = 1; i < args.size(); ++i) {  // suport mutil config file
     std::string arg = args[i];
 
     if (arg == "--config-file" && i + 1 < args.size()) {
-      config_file = args[i + 1];
+      config_file = args[++i];  // skip the value
     } else if (starts_with(arg, "--config-file=")) {
       config_file = arg.substr(14);  // length of "--config-file="
     }
     // Load config file if specified
     if (!config_file.empty()) {
-      if (!LoadFile(config_file)) {
-        LogE("Failed to load config file: %s", config_file.c_str());
-        return false;
+      if (!config_loaded_) {
+        if (!LoadFile(config_file)) {
+          LogE("Failed to load config file: %s", config_file.c_str());
+          return false;
+        }
+        config_loaded_ = true;
       }
     }
     config_file.clear();
   }
 
   // Second pass: process all command line arguments
-  for (int i = 1; i < args.size(); ++i) {
+  for (size_t i = 1; i < args.size(); ++i) {
     std::string arg = args[i];
 
     // Skip help flags
     if ((arg == "-h" || arg == "--help") && allow_exit) {
       std::cout << Help() << std::endl;
-      _exit(0);
+      std::exit(0);
     }
     if (arg == "--dump" && allow_exit) {
       Print();
-      _exit(0);
+      std::exit(0);
     }
 
     // Skip config-file argument as it's already processed
@@ -98,7 +112,7 @@ bool Config::ParseArgs(const std::vector<std::string>& args, bool allow_exit) {
       } else {
         key = long_arg;
         // Check if next argument is the value
-        if (i + 1 < args.size() && !starts_with(args[i + 1], "-")) {
+        if (i + 1 < args.size() && !is_flag(args[i + 1])) {
           value_str = args[++i];
           has_value = true;
         }
@@ -106,20 +120,22 @@ bool Config::ParseArgs(const std::vector<std::string>& args, bool allow_exit) {
     }
 
     if (key.empty()) {
-      no_parsed_.push_back(key);
-      if (has_value) no_parsed_.push_back(value_str);
+      no_parsed_.push_back(arg);
       continue;
     }
 
     auto option_it = options_.find(key);
     if (option_it == options_.end()) {
-      no_parsed_.push_back(key);
+      no_parsed_.push_back("--" + key);
       if (has_value) no_parsed_.push_back(value_str);
       continue;
     }
 
-    // For boolean options, if no value is provided, treat as true
-    if (!has_value && option_it->second.default_value.is_bool()) {
+    // For boolean options, if no value is provided or empty value, treat as true
+    if (has_value && value_str.empty() &&
+        option_it->second.default_value.is_bool()) {
+      Set(key, Json(true));
+    } else if (!has_value && option_it->second.default_value.is_bool()) {
       Set(key, Json(true));
     } else if (!has_value) {
       LogE("Option %s requires a value", key.c_str());
@@ -188,6 +204,8 @@ std::optional<double> Config::GetDouble(const std::string& path) const {
 std::optional<bool> Config::GetBool(const std::string& path) const {
   return Get<bool>(path);
 }
+
+std::vector<std::string> Config::NoParsed() const { return no_parsed_; }
 
 bool Config::Has(const std::string& path) const {
   return Get(path).has_value();
@@ -330,6 +348,11 @@ std::optional<Json> Config::parse_value(const std::string& value_str,
     }
   }
 
+  // Fallback: try parsing as JSON (for arrays/objects)
+  if (default_value.is_array() || default_value.is_object()) {
+    auto parsed = Json::parse(value_str);
+    if (parsed) return *parsed;
+  }
   return std::nullopt;
 }
 
