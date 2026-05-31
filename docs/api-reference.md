@@ -798,16 +798,41 @@ static Response Text(text);
 static Response Html(html);
 static Response Error(message);
 static Response Success(message="OK");
-
-// Macros (disabled when INSPECT_DISABLE defined)
-INSPECT_ROUTE(path, desc, handler)
-INSPECT_WEBSOCKET(path, desc, handler)
-INSPECT_STATIC(path, content, content_type)
-INSPECT_JSON(path, json_expr)
-INSPECT_TEXT(path, text_expr)
-INSPECT_PUBLISH(url, message)
-INSPECT_PUBLISH_BIN(url, bin)
 ```
+
+#### Macros (disabled when `INSPECT_DISABLE` defined)
+
+```cpp
+// Register HTTP route — use `req` and `resp` in body
+INSPECT(path, desc, {
+  resp = Inspect::Json(myJson);
+});
+
+// Register WebSocket route — req.body = received message
+INSPECT_WS(path, desc, {
+  resp = Inspect::Text(req.body);
+});
+
+// Expose a variable as JSON {"value": expr}
+INSPECT_VAR(path, expr);
+
+// Register static content
+INSPECT_STATIC(path, content, content_type);
+
+// Publish to WebSocket subscribers
+INSPECT_PUBLISH(url, message);
+INSPECT_PUBLISH_BIN(url, binary_data);
+```
+
+#### Web Console
+
+The built-in index page (`/`) provides:
+- **Left sidebar**: clickable route list (click HTTP routes to send GET, click WS routes to fill path)
+- **Info bar**: process uptime, RSS, threads, fds, load average, memory, time
+- **HTTP panel**: GET/POST with JSON pretty-printing
+- **WebSocket panel**: connect/disconnect, color-coded message log (recv=green, send=blue, sys=gray, err=red)
+
+The HTML source is maintained separately in `src/debug/inspect_page.html` and embedded at CMake configure time via `cmake/embed_file.cmake`.
 
 ### Tracer — Chrome trace format
 

@@ -47,7 +47,7 @@ xtils/
 ├── src/                    # Implementation (.cc files, mirrors include layout)
 ├── tests/                  # Unit tests (*_test.cc, uses doctest)
 ├── examples/               # Usage examples
-├── cmake/                  # CMake helpers (autogen, config template)
+├── cmake/                  # CMake helpers (autogen, embed_file, config template)
 ├── CMakeLists.txt          # Root build file
 └── docs/                   # This documentation
 ```

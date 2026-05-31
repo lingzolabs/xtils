@@ -7,6 +7,16 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
+### 2025-05 — Inspect Overhaul
+
+- **refactor(inspect)**: rewrite Impl class — reduce from ~880 to ~330 lines, cleaner architecture
+- **feat(inspect)**: add built-in web console with HTTP (GET/POST) and WebSocket panels
+- **refactor(inspect)**: extract HTML/CSS/JS to standalone `src/debug/inspect_page.html`
+- **build(inspect)**: add `cmake/embed_file.cmake` to embed files as C++ `const char*` at configure time
+- **refactor(inspect)**: replace legacy macros with unified `INSPECT`/`INSPECT_WS`/`INSPECT_VAR`
+- **feat(inspect)**: web UI renders routes and server info from embedded JSON (JS-driven DOM)
+- **refactor(inspect)**: system info collection simplified to compact `SysSnapshot` struct
+
 ### 2025-05 — FSM Improvements, Multipart & mbedTLS
 
 - **fix(app)**: `Service::Deinit()` now called before stopping infrastructure — services can safely perform network cleanup (e.g. WebSocket close handshake) in `Deinit()`
