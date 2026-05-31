@@ -65,12 +65,11 @@ class SimpleService : public xtils::Service<SimpleService> {
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
       });
     }
-    INSPECT_ROUTE("/basic_app/trace", "get trace info",
-                  [](const Inspect::Request& req, Inspect::Response& resp) {
-                    std::string tracer;
-                    TRACE_DATA(&tracer);
-                    resp = Inspect::Text(tracer);
-                  });
+    INSPECT("/basic_app/trace", "get trace info", {
+      std::string tracer;
+      TRACE_DATA(&tracer);
+      resp = Inspect::Text(tracer);
+    });
   }
 
   void Deinit() override { LogI("Deinit"); }

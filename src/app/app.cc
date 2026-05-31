@@ -139,25 +139,22 @@ void App::init_inspect() {
   }
 
   if (Conf().GetOr<bool>("xtils.inspect.enable")) {
-    INSPECT_ROUTE("/api/config", "config in process",
-                  [this](const Inspect::Request &req, Inspect::Response &resp) {
-                    resp = Inspect::Json(config_.ToJson());
-                  });
-    INSPECT_ROUTE("/api/tracer", "get tracer info",
-                  [this](const Inspect::Request &req, Inspect::Response &resp) {
-                    std::string tracer;
-                    TRACE_DATA(&tracer);
-                    resp = Inspect::Text(tracer);
-                  });
-    INSPECT_ROUTE("/api/version", "get version info",
-                  [this](const Inspect::Request &req, Inspect::Response &resp) {
-                    Json version;
-                    version["major"] = major_;
-                    version["minor"] = minor_;
-                    version["patch"] = patch_;
-                    version["build_time"] = build_time_;
-                    resp = Inspect::Json(version);
-                  });
+    INSPECT("/api/config", "config in process", {
+      resp = Inspect::Json(config_.ToJson());
+    });
+    INSPECT("/api/tracer", "get tracer info", {
+      std::string tracer;
+      TRACE_DATA(&tracer);
+      resp = Inspect::Text(tracer);
+    });
+    INSPECT("/api/version", "get version info", {
+      Json version;
+      version["major"] = major_;
+      version["minor"] = minor_;
+      version["patch"] = patch_;
+      version["build_time"] = build_time_;
+      resp = Inspect::Json(version);
+    });
   }
 #endif
 }

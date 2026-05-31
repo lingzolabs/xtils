@@ -189,67 +189,63 @@ class Inspect {
 }  // namespace xtils
 
 #ifdef INSPECT_DISABLE
-#define INSPECT_ROUTE(path, desc, handler)
-#define INSPECT_WEBSOCKET(path, desc, handler)
+
+#define INSPECT(path, desc, body)
+#define INSPECT_WS(path, desc, body)
+#define INSPECT_VAR(path, expr)
 #define INSPECT_STATIC(path, content, content_type)
-#define INSPECT_JSON(path, json_expr)
-#define INSPECT_TEXT(path, text_expr)
 #define INSPECT_PUBLISH(url, message)
 #define INSPECT_PUBLISH_BIN(url, bin)
+
 #else
 
-// Simple route registration macros
+// ---------------------------------------------------------------------------
+// Modern macros - concise registration
+// ---------------------------------------------------------------------------
 
 /**
- * Register a route with description
+ * Register HTTP route.
+ * - Inline body: INSPECT("/path", "desc", { resp = Inspect::Json(j); });
+ * - Named handler: INSPECT("/path", "desc", HandleFoo(req, resp));
+ *
+ * `req` and `resp` are available in the body.
  */
-#define INSPECT_ROUTE(path, desc, handler)            \
-  do {                                                \
-    xtils::Inspect::Get().Route(path, desc, handler); \
-  } while (0)
+#define INSPECT(path, desc, body)                                          \
+  xtils::Inspect::Get().Route(path, desc,                                  \
+      [&](const xtils::Inspect::Request &req [[maybe_unused]],             \
+          xtils::Inspect::Response &resp [[maybe_unused]]) { body; })
 
 /**
- * Register WebSocket route with description
+ * Register WebSocket route. `req.body` = received message.
+ *
+ *   INSPECT_WS("/ws/echo", "echo", { resp = Inspect::Text(req.body); });
  */
-#define INSPECT_WEBSOCKET(path, desc, handler)            \
-  do {                                                    \
-    xtils::Inspect::Get().WebSocket(path, desc, handler); \
-  } while (0)
+#define INSPECT_WS(path, desc, body)                                       \
+  xtils::Inspect::Get().WebSocket(path, desc,                              \
+      [&](const xtils::Inspect::Request &req [[maybe_unused]],             \
+          xtils::Inspect::Response &resp [[maybe_unused]]) { body; })
 
 /**
- * Register static content
+ * Expose a variable/expression as JSON: {"value": expr}
+ *
+ *   INSPECT_VAR("/api/counter", counter.load());
+ *   INSPECT_VAR("/api/name", config.name);
  */
-#define INSPECT_STATIC(path, content, content_type)            \
-  do {                                                         \
-    xtils::Inspect::Get().Static(path, content, content_type); \
-  } while (0)
+#define INSPECT_VAR(path, expr)                                            \
+  xtils::Inspect::Get().Route(path, #expr,                                 \
+      [&](const xtils::Inspect::Request &, xtils::Inspect::Response &resp) { \
+        xtils::Json _j_; _j_["value"] = (expr);                           \
+        resp = xtils::Inspect::Json(_j_);                                  \
+      })
 
 /**
- * Quick JSON response route
+ * Register static content.
  */
-#define INSPECT_JSON(path, json_expr)                      \
-  do {                                                     \
-    auto handler = [&](const xtils::Inspect::Request &req, \
-                       xtils::Inspect::Response &resp) {   \
-      resp = xtils::Inspect::Json(json_expr);              \
-    };                                                     \
-    xtils::Inspect::Get().Route(path, handler);            \
-  } while (0)
+#define INSPECT_STATIC(path, content, content_type) \
+  xtils::Inspect::Get().Static(path, content, content_type)
 
 /**
- * Quick text response route
- */
-#define INSPECT_TEXT(path, text_expr)                      \
-  do {                                                     \
-    auto handler = [&](const xtils::Inspect::Request &req, \
-                       xtils::Inspect::Response &resp) {   \
-      resp = xtils::Inspect::Text(text_expr);              \
-    };                                                     \
-    xtils::Inspect::Get().Route(path, handler);            \
-  } while (0)
-
-/**
- * Publish message to WebSocket clients
+ * Publish to WebSocket subscribers.
  */
 #define INSPECT_PUBLISH(url, message) \
   xtils::Inspect::Get().Publish(url, message, true)

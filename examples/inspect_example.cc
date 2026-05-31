@@ -77,58 +77,37 @@ int main() {
   Inspect::Get().Init("127.0.0.1", 9090);
   auto &inspect = Inspect::Get();
 
-  // Register routes using the new INSPECT_ROUTE macro
-  INSPECT_ROUTE("/api/hello", "Returns a hello world message with request info",
-                HandleHello);
+  // Register routes - named handlers
+  INSPECT("/api/hello", "Hello world message", HandleHello(req, resp));
+  INSPECT("/api/user", "Get user info (?id=)", HandleUserInfo(req, resp));
+  INSPECT("/api/status", "Server status", HandleStatus(req, resp));
+  INSPECT("/api/echo", "Echo request body (POST)", HandleEcho(req, resp));
 
-  INSPECT_ROUTE("/api/user",
-                "Get user information by ID (requires ?id=<user_id> parameter)",
-                HandleUserInfo);
+  // Inline routes with new INSPECT macro
+  INSPECT("/api/time", "Current timestamp", {
+    xtils::Json j;
+    j["timestamp"] = std::time(nullptr);
+    resp = Inspect::Json(j);
+  });
 
-  INSPECT_ROUTE("/api/status", "Get server status and information",
-                HandleStatus);
+  INSPECT("/api/counter", "Get or increment counter", {
+    if (req.body.empty()) {
+      xtils::Json j;
+      j["counter"] = global_counter.load();
+      resp = Inspect::Json(j);
+    } else {
+      int val = ++global_counter;
+      xtils::Json j;
+      j["counter"] = val;
+      j["message"] = "incremented";
+      resp = Inspect::Json(j);
+    }
+  });
 
-  INSPECT_ROUTE("/api/echo", "Echo back the request body (POST only)",
-                HandleEcho);
-
-  // Register a simple lambda route
-  INSPECT_ROUTE("/api/time", "Get current timestamp",
-                [](const Inspect::Request &req, Inspect::Response &resp) {
-                  xtils::Json time_response;
-                  time_response["timestamp"] = std::time(nullptr);
-                  time_response["iso_time"] = "2024-01-01T00:00:00Z";
-                  resp = Inspect::Json(time_response);
-                });
-
-  // Counter API for WebSocket demonstration
-  INSPECT_ROUTE("/api/counter", "Get or increment global counter",
-                [](const Inspect::Request &req, Inspect::Response &resp) {
-                  if (req.body.empty()) {
-                    xtils::Json response;
-                    response["counter"] = global_counter.load();
-                    resp = Inspect::Json(response);
-                  } else if (!req.body.empty()) {
-                    int new_value = ++global_counter;
-                    xtils::Json response;
-                    response["counter"] = new_value;
-                    response["message"] = "Counter incremented";
-
-                    // Publish update via WebSocket
-                    xtils::Json ws_message;
-                    ws_message["type"] = "counter_update";
-                    ws_message["counter"] = new_value;
-
-                    resp = Inspect::Json(response);
-                  } else {
-                    resp = Inspect::Error("Method not allowed");
-                  }
-                });
-
-  INSPECT_WEBSOCKET("/ping", "支持http和ws",
-                    [](const Inspect::Request &req, Inspect::Response &resp) {
-                      LogI("/ping %s", req.body.c_str());
-                      resp = Inspect::Text("pong");
-                    });
+  INSPECT_WS("/ping", "echo pong", {
+    LogI("/ping %s", req.body.c_str());
+    resp = Inspect::Text("pong");
+  });
 
   // Add a simple demo page
   std::string demo_html = R"(<!DOCTYPE html>
@@ -172,7 +151,7 @@ int main() {
     <h2>Features Demonstrated:</h2>
     <ul>
         <li>Thread-safe singleton pattern</li>
-        <li>INSPECT_ROUTE macros for easy registration</li>
+        <li>INSPECT macros for easy registration</li>
         <li>Real-time WebSocket publishing</li>
         <li>Enhanced error handling and logging</li>
         <li>Auto-generated API documentation</li>
@@ -223,7 +202,7 @@ int main() {
   LogI("=== Optimized Inspect Server Running ===");
   LogI("Features demonstrated:");
   LogI("  - Thread-safe singleton pattern");
-  LogI("  - INSPECT_ROUTE macros for easy registration");
+  LogI("  - INSPECT macros for easy registration");
   LogI("  - Real-time WebSocket publishing");
   LogI("  - Enhanced error handling and logging");
   LogI("  - Auto-generated API documentation");
