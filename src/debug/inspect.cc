@@ -16,6 +16,7 @@
 #include "xtils/utils/exception.h"
 #include "xtils/utils/file_utils.h"
 #include "xtils/utils/json.h"
+#include "inspect_page.h"  // generated: kInspectPageHtml
 #include "xtils/utils/string_utils.h"
 
 namespace xtils {
@@ -373,109 +374,31 @@ class Impl : public HttpRequestHandler {
   }
 
   std::string BuildIndexHtml() const {
-    // Build route list
-    std::string route_items;
-    for (auto& [path, info] : routes_) {
-      std::string click = info.is_websocket
-          ? "event.preventDefault();fillPath('" + path + "',1)"
-          : "event.preventDefault();fillPath('" + path + "',0);httpSend()";
-      route_items += "<li><a href=\"" + path + "\" onclick=\"" + click +
-                     "\">" + path + "</a>";
-      if (info.is_websocket) route_items += " <b class=t>WS</b>";
-      if (!info.description.empty())
-        route_items += "<br><small>" + info.description + "</small>";
-      route_items += "</li>";
+    // Serialize route & info data as JSON
+    xtils::Json routes_json;
+    for (auto& [path, ri] : routes_) {
+      xtils::Json r;
+      r["path"] = path;
+      r["ws"] = ri.is_websocket;
+      if (!ri.description.empty()) r["desc"] = ri.description;
+      routes_json.push_back(r);
     }
 
-    // Build info bar
-    auto snap = SysSnapshot::Collect();
-    std::string info_items;
-    auto add = [&](const char* k, const std::string& v) {
-      if (!v.empty()) info_items += std::string("<b>") + k + "</b> " + v + " ";
-    };
-    add("up", snap.uptime);
-    add("rss", snap.rss);
-    add("thr", snap.threads);
-    add("fd", snap.fds);
-    add("load", snap.load);
-    add("mem", snap.mem);
-    add("@", snap.localtime);
+    auto s = SysSnapshot::Collect();
+    xtils::Json info_json;
+    if (!s.uptime.empty()) info_json["uptime"] = s.uptime;
+    if (!s.rss.empty()) info_json["rss"] = s.rss;
+    if (!s.threads.empty()) info_json["threads"] = s.threads;
+    if (!s.fds.empty()) info_json["fds"] = s.fds;
+    if (!s.load.empty()) info_json["load"] = s.load;
+    if (!s.mem.empty()) info_json["mem"] = s.mem;
+    if (!s.localtime.empty()) info_json["time"] = s.localtime;
 
-    // Assemble page
-    std::string html = kPageTemplate;
-    ReplaceAll(html, "{{ROUTES}}", route_items);
-    ReplaceAll(html, "{{INFO}}", info_items);
+    std::string html = kInspectPageHtml;
+    ReplaceAll(html, "{{ROUTES_JSON}}", routes_json.dump());
+    ReplaceAll(html, "{{INFO_JSON}}", info_json.dump());
     return html;
   }
-
-  static constexpr const char* kPageTemplate = R"html(<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>xtils inspect</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font:12px/1.5 -apple-system,system-ui,monospace;padding:10px;background:#f7f7f7}
-h1{font-size:15px;margin-bottom:8px}
-h1 .readme{font-size:11px;font-weight:normal;margin-left:8px}
-.L{display:flex;gap:8px;height:calc(100vh - 42px)}
-.nav{width:260px;flex-shrink:0;background:#fff;border:1px solid #ddd;border-radius:4px;padding:8px;overflow-y:auto}
-.nav li{list-style:none;padding:2px 0}
-.nav a{color:#07c;text-decoration:none}
-.nav a:hover{text-decoration:underline}
-.nav small{color:#999;font-size:10px}
-.t{color:#fff;background:#5a9;font-size:9px;padding:0 3px;border-radius:2px;font-weight:normal}
-.R{flex:1;display:flex;flex-direction:column;gap:6px;min-width:0}
-.info{font-size:11px;color:#555;background:#eee;padding:4px 8px;border-radius:3px}
-.info b{color:#888;font-weight:normal;margin-right:2px}
-.P{flex:1;background:#fff;border:1px solid #ddd;border-radius:4px;padding:8px;display:flex;flex-direction:column;min-height:0}
-.P h3{font-size:12px;margin-bottom:6px}
-.row{display:flex;gap:4px;margin-bottom:4px;align-items:center}
-.row input,.row select{font:11px monospace;padding:2px 5px;border:1px solid #ccc;border-radius:3px}
-.row input{flex:1;min-width:0}
-.row button{font-size:11px;padding:2px 8px;border:1px solid #ccc;border-radius:3px;background:#fafafa;cursor:pointer}
-.row button:hover{background:#eee}
-#resp{flex:1;font:11px/1.4 monospace;background:#f5f5f5;border:1px solid #ddd;border-radius:3px;padding:6px;resize:none}
-#log{flex:1;font:11px/1.4 monospace;background:#1a1a2e;border-radius:3px;padding:6px;overflow:auto;min-height:0}
-#log div{white-space:pre}
-.s0{color:#777}.s1{color:#e57}.s2{color:#7c7}.s3{color:#6bf}
-.st{font-size:11px;margin-left:6px}
-.st.on{color:#2a2;font-weight:bold}.st.off{color:#999}
-</style></head><body>
-<h1>xtils inspect <a href="https://github.com/lingzolabs/xtils" class="readme">README</a></h1>
-<div class="L">
-<ul class="nav">{{ROUTES}}</ul>
-<div class="R">
-<div class="info">{{INFO}}</div>
-<div class="P" style="flex:2">
-<h3>HTTP</h3>
-<div class="row"><select id="m"><option>GET</option><option>POST</option></select><input id="u" value="/"><button onclick="go()">Send</button></div>
-<div class="row"><input id="b" placeholder="body"></div>
-<textarea id="resp" readonly></textarea>
-</div>
-<div class="P" style="flex:3">
-<h3>WebSocket<span id="st" class="st off">off</span></h3>
-<div class="row"><input id="wp" value="/ping"><button id="cb" onclick="wt()">Connect</button><button onclick="document.getElementById('log').innerHTML=''">Clear</button></div>
-<div id="log"></div>
-<div class="row"><input id="wm" placeholder="message" onkeydown="event.key==='Enter'&&ws()"><button onclick="ws()">Send</button></div>
-</div>
-</div>
-</div>
-<script>
-function go(){
-  var m=document.getElementById('m').value,u=document.getElementById('u').value||'/';
-  var o={method:m};if(m==='POST'){var b=document.getElementById('b').value;if(b)o.body=b;}
-  var r=document.getElementById('resp');r.value='...';
-  fetch(u,o).then(function(x){return x.text().then(function(t){
-    try{t=JSON.stringify(JSON.parse(t),null,2)}catch(e){}
-    r.value=x.status+' '+x.statusText+'\n\n'+t;
-  })}).catch(function(e){r.value='Error: '+e.message});
-}
-var _w=null,_l=document.getElementById('log');
-function _t(){var d=new Date();return[d.getHours(),d.getMinutes(),d.getSeconds()].map(function(v){return v<10?'0'+v:v}).join(':')}
-function _a(c,p,m){var d=document.createElement('div');d.className='s'+c;d.textContent='['+_t()+'] '+p+' '+m;_l.appendChild(d);if(_l.children.length>200)_l.removeChild(_l.firstChild);_l.scrollTop=_l.scrollHeight}
-function _s(on){var e=document.getElementById('st');e.textContent=on?'on':'off';e.className='st '+(on?'on':'off');document.getElementById('cb').textContent=on?'Disconnect':'Connect'}
-function wt(){if(_w){_w.close();return;}var p=document.getElementById('wp').value||'/ping',url='ws://'+location.host+p;_w=new WebSocket(url);_w.onopen=function(){_s(1);_a(0,'--','connected '+url)};_w.onclose=function(){_s(0);_a(0,'--','disconnected');_w=null};_w.onerror=function(){_a(1,'!!','error')};_w.onmessage=function(e){_a(2,'\u2190',e.data)}}
-function ws(){var i=document.getElementById('wm');if(!i.value||!_w)return;_w.send(i.value);_a(3,'\u2192',i.value);i.value=''}
-function fillPath(p,w){document.getElementById(w?'wp':'u').value=p}
-</script></body></html>)html";
 
   mutable std::recursive_mutex mu_;
   std::unique_ptr<HttpServer> server_;

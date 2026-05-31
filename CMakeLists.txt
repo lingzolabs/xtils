@@ -26,6 +26,14 @@ endif()
 
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/xtils-autogen.cmake)
 
+# Embed inspect HTML page
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/embed_file.cmake)
+embed_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/debug/inspect_page.html
+  ${CMAKE_BINARY_DIR}/generated/inspect_page.h
+  kInspectPageHtml
+)
+
 file(GLOB_RECURSE SRCS src/*.cc)
 
 
@@ -35,6 +43,7 @@ target_include_directories(xtils PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+target_include_directories(xtils PRIVATE ${CMAKE_BINARY_DIR}/generated)
 
 target_compile_features(xtils PUBLIC cxx_std_17)
 

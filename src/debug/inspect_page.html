@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>xtils inspect</title>
+<style>
+:root {
+  --bg: #f5f6f7;
+  --card: #fff;
+  --border: #e0e0e0;
+  --text: #333;
+  --muted: #888;
+  --accent: #4a90d9;
+  --accent-hover: #357abd;
+  --log-bg: #1e2030;
+  --radius: 5px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font: 13px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  padding: 12px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+header h1 { font-size: 16px; font-weight: 600; }
+header a { font-size: 11px; color: var(--muted); text-decoration: none; }
+header a:hover { color: var(--accent); }
+
+.layout {
+  display: flex;
+  gap: 10px;
+  height: calc(100vh - 52px);
+}
+
+/* Sidebar */
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  overflow-y: auto;
+}
+.sidebar h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.sidebar ul { list-style: none; }
+.sidebar li { padding: 3px 0; }
+.sidebar a {
+  font: 12px/1.4 SFMono-Regular, Menlo, monospace;
+  color: var(--accent);
+  text-decoration: none;
+}
+.sidebar a:hover { text-decoration: underline; }
+.sidebar .ws-tag {
+  display: inline-block;
+  font-size: 9px;
+  background: #52b788;
+  color: #fff;
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.sidebar .desc {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+/* Main area */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Info bar */
+.info-bar {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.info-bar label { color: #aaa; margin-right: 3px; }
+
+/* Panel */
+.panel {
+  flex: 1;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.panel h3 {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Controls */
+.ctrl {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.ctrl input, .ctrl select {
+  font: 12px SFMono-Regular, Menlo, monospace;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #fafbfc;
+}
+.ctrl input { flex: 1; min-width: 0; }
+.ctrl input:focus, .ctrl select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(74, 144, 217, 0.15);
+}
+
+/* Buttons */
+.btn {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #fafbfc;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.btn:hover { background: #f0f0f0; }
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-muted { color: var(--muted); border-color: transparent; }
+
+/* HTTP response */
+#http-response {
+  flex: 1;
+  font: 11px/1.5 SFMono-Regular, Menlo, monospace;
+  background: #fafbfc;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 8px;
+  resize: none;
+  color: var(--text);
+}
+
+/* WebSocket log */
+#ws-log {
+  flex: 1;
+  font: 11px/1.6 SFMono-Regular, Menlo, monospace;
+  background: var(--log-bg);
+  border-radius: 3px;
+  padding: 8px;
+  overflow-y: auto;
+  min-height: 0;
+}
+#ws-log .line { white-space: pre-wrap; word-break: break-all; }
+#ws-log .sys  { color: #6c7086; }
+#ws-log .err  { color: #f38ba8; }
+#ws-log .recv { color: #a6e3a1; }
+#ws-log .send { color: #89b4fa; }
+
+/* Status */
+.status { font-size: 11px; font-weight: 500; }
+.status::before {
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.status.on { color: #40a02b; }
+.status.on::before { background: #40a02b; }
+.status.off { color: #999; }
+.status.off::before { background: #ccc; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>xtils inspect</h1>
+  <a href="https://github.com/lingzolabs/xtils" target="_blank">GitHub</a>
+</header>
+
+<div class="layout">
+  <nav class="sidebar">
+    <h2>Routes</h2>
+    <ul id="route-list"></ul>
+  </nav>
+
+  <div class="main">
+    <div class="info-bar" id="info-bar"></div>
+
+    <div class="panel" style="flex: 2;">
+      <h3>HTTP</h3>
+      <div class="ctrl">
+        <select id="http-method">
+          <option>GET</option>
+          <option>POST</option>
+        </select>
+        <input id="http-url" value="/" placeholder="/path">
+        <button class="btn btn-primary" onclick="httpSend()">Send</button>
+      </div>
+      <div class="ctrl">
+        <input id="http-body" placeholder="Request body (POST)">
+      </div>
+      <textarea id="http-response" readonly placeholder="Response..."></textarea>
+    </div>
+
+    <div class="panel" style="flex: 3;">
+      <h3>
+        WebSocket
+        <span id="ws-status" class="status off">disconnected</span>
+      </h3>
+      <div class="ctrl">
+        <input id="ws-path" value="/ping" placeholder="/ws-path">
+        <button id="ws-toggle-btn" class="btn" onclick="wsToggle()">Connect</button>
+        <button class="btn btn-muted" onclick="wsClear()">Clear</button>
+      </div>
+      <div id="ws-log"></div>
+      <div class="ctrl" style="margin-top: 6px; margin-bottom: 0;">
+        <input id="ws-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter')wsSend()">
+        <button class="btn btn-primary" onclick="wsSend()">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  var ROUTES = {{ROUTES_JSON}};
+  var INFO = {{INFO_JSON}};
+
+  // =========================================================================
+  // Render
+  // =========================================================================
+
+  function $(id) { return document.getElementById(id); }
+
+  function renderRoutes() {
+    var ul = $("route-list");
+    ROUTES.forEach(function(r) {
+      var li = document.createElement("li");
+      var a = document.createElement("a");
+      a.href = r.path;
+      a.textContent = r.path;
+      a.onclick = function(e) {
+        e.preventDefault();
+        if (r.ws) {
+          $("ws-path").value = r.path;
+        } else {
+          $("http-url").value = r.path;
+          httpSend();
+        }
+      };
+      li.appendChild(a);
+
+      if (r.ws) {
+        var tag = document.createElement("span");
+        tag.className = "ws-tag";
+        tag.textContent = "WS";
+        li.appendChild(tag);
+      }
+
+      if (r.desc) {
+        var desc = document.createElement("span");
+        desc.className = "desc";
+        desc.textContent = r.desc;
+        li.appendChild(desc);
+      }
+
+      ul.appendChild(li);
+    });
+  }
+
+  function renderInfo() {
+    var bar = $("info-bar");
+    Object.keys(INFO).forEach(function(key) {
+      var span = document.createElement("span");
+      var label = document.createElement("label");
+      label.textContent = key;
+      span.appendChild(label);
+      span.appendChild(document.createTextNode(INFO[key]));
+      bar.appendChild(span);
+    });
+  }
+
+  // =========================================================================
+  // HTTP
+  // =========================================================================
+
+  window.httpSend = function() {
+    var method = $("http-method").value;
+    var url = $("http-url").value || "/";
+    var body = $("http-body").value;
+    var output = $("http-response");
+    var opts = { method: method };
+
+    if (method === "POST" && body) opts.body = body;
+    output.value = "Loading...";
+
+    fetch(url, opts)
+      .then(function(res) {
+        return res.text().then(function(text) {
+          var ct = res.headers.get("content-type") || "";
+          if (ct.indexOf("json") >= 0) {
+            try { text = JSON.stringify(JSON.parse(text), null, 2); } catch(e) {}
+          }
+          output.value = res.status + " " + res.statusText + "\n\n" + text;
+        });
+      })
+      .catch(function(err) { output.value = "Error: " + err.message; });
+  };
+
+  // =========================================================================
+  // WebSocket
+  // =========================================================================
+
+  var ws = null;
+  var logEl = $("ws-log");
+
+  function formatTime() {
+    var d = new Date();
+    var pad = function(n) { return n < 10 ? "0" + n : "" + n; };
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function appendLog(cls, prefix, msg) {
+    var line = document.createElement("div");
+    line.className = "line " + cls;
+    line.textContent = "[" + formatTime() + "] " + prefix + " " + msg;
+    logEl.appendChild(line);
+    if (logEl.children.length > 200) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setConnected(on) {
+    var st = $("ws-status");
+    var btn = $("ws-toggle-btn");
+    st.textContent = on ? "connected" : "disconnected";
+    st.className = "status " + (on ? "on" : "off");
+    btn.textContent = on ? "Disconnect" : "Connect";
+    btn.className = on ? "btn btn-primary" : "btn";
+  }
+
+  window.wsToggle = function() {
+    if (ws) { ws.close(); return; }
+    var path = $("ws-path").value || "/ping";
+    var url = "ws://" + location.host + path;
+    ws = new WebSocket(url);
+    ws.onopen = function() { setConnected(true); appendLog("sys", "--", "connected " + url); };
+    ws.onclose = function() { setConnected(false); appendLog("sys", "--", "disconnected"); ws = null; };
+    ws.onerror = function() { appendLog("err", "!!", "connection error"); };
+    ws.onmessage = function(e) { appendLog("recv", "\u2190", e.data); };
+  };
+
+  window.wsSend = function() {
+    var input = $("ws-input");
+    if (!input.value || !ws) return;
+    ws.send(input.value);
+    appendLog("send", "\u2192", input.value);
+    input.value = "";
+  };
+
+  window.wsClear = function() { logEl.innerHTML = ""; };
+
+  // =========================================================================
+  // Init
+  // =========================================================================
+
+  renderRoutes();
+  renderInfo();
+
+})();
+</script>
+</body>
+</html>
