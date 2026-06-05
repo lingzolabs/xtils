@@ -52,13 +52,13 @@ TEST_CASE_FIXTURE(EventTestFixture,
   std::atomic<int> received{0};
 
   // connect for enum type requires explicit template parameter
-  em.connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
+  em.Connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
     called = true;
     received = static_cast<int>(id);
   });
 
   // emit for enum type should also use explicit template parameter
-  em.emit<TestEventIds>(EVENT_INT_DATA);
+  em.Emit<TestEventIds>(EVENT_INT_DATA);
   waitForTasks();
 
   CHECK(called);
@@ -66,11 +66,11 @@ TEST_CASE_FIXTURE(EventTestFixture,
 
   // multiple callbacks for same enum id
   std::atomic<int> count{0};
-  em.connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
+  em.Connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
     (void)id;
     ++count;
   });
-  em.emit<TestEventIds>(EVENT_INT_DATA);
+  em.Emit<TestEventIds>(EVENT_INT_DATA);
   waitForTasks();
   CHECK(count.load() >= 1);
 }
@@ -84,12 +84,12 @@ TEST_CASE_FIXTURE(EventTestFixture,
     std::string value;
 
     // connect for non-enum type requires explicit template parameter
-    em.connect<std::string>([&](const std::string& s) {
+    em.Connect<std::string>([&](const std::string& s) {
       got = true;
       value = s;
     });
 
-    em.emit<std::string>(std::string("hello xtils"));
+    em.Emit<std::string>(std::string("hello xtils"));
     waitForTasks();
 
     CHECK(got);
@@ -100,13 +100,13 @@ TEST_CASE_FIXTURE(EventTestFixture,
     std::atomic<bool> got{false};
     CustomData out{0, ""};
 
-    em.connect<CustomData>([&](const CustomData& d) {
+    em.Connect<CustomData>([&](const CustomData& d) {
       got = true;
       out = d;
     });
 
     CustomData in{42, "alice"};
-    em.emit<CustomData>(in);
+    em.Emit<CustomData>(in);
     waitForTasks();
 
     CHECK(got);
@@ -121,17 +121,17 @@ TEST_CASE_FIXTURE(
 
   std::atomic<int> c1{0}, c2{0};
 
-  em.connect<std::string>([&](const std::string& s) {
+  em.Connect<std::string>([&](const std::string& s) {
     (void)s;
     ++c1;
   });
-  em.connect<std::string>([&](const std::string& s) {
+  em.Connect<std::string>([&](const std::string& s) {
     (void)s;
     ++c2;
   });
 
-  em.emit<std::string>(std::string("a"));
-  em.emit<std::string>(std::string("b"));
+  em.Emit<std::string>(std::string("a"));
+  em.Emit<std::string>(std::string("b"));
   waitForTasks();
 
   CHECK(c1 == 2);
@@ -144,7 +144,7 @@ TEST_CASE_FIXTURE(
   EventManager em(tg_);
   std::atomic<int> total{0};
 
-  em.connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
+  em.Connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
     (void)id;
     ++total;
   });
@@ -157,7 +157,7 @@ TEST_CASE_FIXTURE(
   for (int t = 0; t < threads; ++t) {
     thr.emplace_back([&]() {
       for (int i = 0; i < per; ++i) {
-        em.emit<TestEventIds>(EVENT_INT_DATA);
+        em.Emit<TestEventIds>(EVENT_INT_DATA);
       }
     });
   }
@@ -178,11 +178,11 @@ TEST_CASE_FIXTURE(
 
   {
     EventManager em(local_tg);
-    em.connect<std::string>([&](const std::string& s) {
+    em.Connect<std::string>([&](const std::string& s) {
       (void)s;
       executed = true;
     });
-    em.emit<std::string>(std::string("lifecycle"));
+    em.Emit<std::string>(std::string("lifecycle"));
     waitForTasks();
   }  // EventManager destroyed here
 

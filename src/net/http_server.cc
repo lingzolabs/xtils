@@ -7,7 +7,7 @@
 #include "xtils/logging/logger.h"
 #include "xtils/net/websocket_common.h"
 #include "xtils/utils/string_utils.h"
-#include "xtils/utils/string_view.h"
+#include "xtils/utils/string_utils.h"
 
 namespace xtils {
 

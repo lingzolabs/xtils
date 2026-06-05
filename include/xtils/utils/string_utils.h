@@ -8,10 +8,9 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
-
-#include "xtils/utils/string_view.h"
 
 namespace xtils {
 
@@ -253,5 +252,43 @@ class StackString {
   char buf_[N];
   size_t len_ = 0;  // Does not include the \0.
 };
+
+// ============================================================================
+// string_view utility functions (migrated from string_view.h)
+// ============================================================================
+
+// Case-insensitive equality comparison for string views.
+inline bool CaseInsensitiveEq(std::string_view a, std::string_view b) {
+  if (a.size() != b.size()) return false;
+  if (a.size() == 0) return true;
+  return strncasecmp(a.data(), b.data(), a.size()) == 0;
+}
+
+// Returns true if |sv| case-insensitively matches any element in |others|.
+inline bool CaseInsensitiveOneOf(
+    std::string_view sv,
+    const std::vector<std::string_view>& others) {
+  for (std::string_view other : others) {
+    if (CaseInsensitiveEq(sv, other)) return true;
+  }
+  return false;
+}
+
+// Returns true if |sv| starts with |prefix| (string_view overload).
+inline bool StartsWith(std::string_view sv, std::string_view prefix) {
+  if (prefix.size() == 0) return true;
+  if (sv.size() == 0) return false;
+  if (prefix.size() > sv.size()) return false;
+  return memcmp(sv.data(), prefix.data(), prefix.size()) == 0;
+}
+
+// Returns true if |sv| ends with |suffix| (string_view overload).
+inline bool EndsWith(std::string_view sv, std::string_view suffix) {
+  if (suffix.size() == 0) return true;
+  if (sv.size() == 0) return false;
+  if (suffix.size() > sv.size()) return false;
+  size_t off = sv.size() - suffix.size();
+  return memcmp(sv.data() + off, suffix.data(), suffix.size()) == 0;
+}
 
 }  // namespace xtils

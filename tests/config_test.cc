@@ -37,11 +37,11 @@ TEST_CASE("Basic Option Definition") {
 TEST_CASE("Template Define") {
   Config config;
 
-  config.define<std::string>("str", "String", "hello")
-      .define<int>("num", "Number", 123)
-      .define<double>("pi", "Pi", 3.14159)
-      .define<bool>("flag", "Flag", false)
-      .define<const char*>("cstr", "C-String", "world");
+  config.Define<std::string>("str", "String", "hello")
+      .Define<int>("num", "Number", 123)
+      .Define<double>("pi", "Pi", 3.14159)
+      .Define<bool>("flag", "Flag", false)
+      .Define<const char*>("cstr", "C-String", "world");
 
   CHECK(config.GetString("str").value() == "hello");
   CHECK(config.GetInt("num").value() == 123);
@@ -93,11 +93,11 @@ TEST_CASE("Template Getters") {
 TEST_CASE("Template Setters") {
   Config config;
 
-  config.set<std::string>("str", "hello");
-  config.set<int>("int", 42);
-  config.set<double>("dbl", 3.14);
-  config.set<bool>("bool", true);
-  config.set<const char*>("cstr", "world");
+  config.Set<std::string>("str", "hello");
+  config.Set<int>("int", 42);
+  config.Set<double>("dbl", 3.14);
+  config.Set<bool>("bool", true);
+  config.Set<const char*>("cstr", "world");
 
   CHECK(config.GetString("str").value() == "hello");
   CHECK(config.GetInt("int").value() == 42);

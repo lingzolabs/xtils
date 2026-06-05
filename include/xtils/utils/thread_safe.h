@@ -19,11 +19,11 @@ class ThreadSafe {
     std::unique_lock<std::mutex> lock(mtx_);
     if (timeout != std::chrono::seconds::max()) {
       auto ret =
-          cv_.wait_for(lock, timeout, [&]() { return !data_.empty() | quit_; });
+          cv_.wait_for(lock, timeout, [&]() { return !data_.empty() || quit_; });
       if (quit_ || !ret) return false;
 
     } else {
-      cv_.wait(lock, [&]() { return !data_.empty() | quit_; });
+      cv_.wait(lock, [&]() { return !data_.empty() || quit_; });
       if (quit_) return false;
     }
     e = data_.front();

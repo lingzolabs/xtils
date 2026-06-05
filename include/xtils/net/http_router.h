@@ -10,7 +10,7 @@
 #include "xtils/net/http_common.h"
 #include "xtils/net/http_multipart.h"
 #include "xtils/net/http_server.h"
-#include "xtils/utils/string_view.h"
+#include "xtils/utils/string_utils.h"
 
 namespace xtils {
 
