@@ -39,3 +39,9 @@ add_custom_command(TARGET bt_example POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/bt_trees
         ${CMAKE_BINARY_DIR}/examples/bt_trees
 )
+
+if(SCRIPTING_ENABLE)
+  add_example(scripting_example scripting_example.cc)
+  add_example(scripting_bench scripting_bench.cc)
+  add_example(scripting_compare scripting_compare.cc)
+endif()

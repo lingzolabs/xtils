@@ -6,6 +6,7 @@ option(INSPECT_DISABLE "Disable inspect module" OFF)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_EXAMPLES "Build examples" OFF)
 option(BUILD_WITH_SANITIZERS "Build with sanitizers" OFF)
+option(SCRIPTING_ENABLE "Enable QuickJS scripting module" OFF)
 # TLS backend: "openssl" (default) or "mbedtls", mutually exclusive
 set(TLS_BACKEND "openssl" CACHE STRING "TLS backend: openssl or mbedtls")
 set_property(CACHE TLS_BACKEND PROPERTY STRINGS openssl mbedtls)
@@ -82,6 +83,24 @@ if(BUILD_WITH_SANITIZERS)
     target_link_options(xtils PUBLIC -fsanitize=address,undefined)
 endif()
 
+if(SCRIPTING_ENABLE)
+  include(FetchContent)
+  FetchContent_Declare(
+    quickjs
+    GIT_REPOSITORY https://github.com/quickjs-ng/quickjs.git
+    GIT_TAG v0.15.1
+  )
+  set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(QJS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+  set(QJS_BUILD_WERROR OFF CACHE BOOL "" FORCE)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(quickjs)
+  target_link_libraries(xtils PRIVATE qjs)
+  target_compile_definitions(xtils PUBLIC XTILS_HAS_SCRIPTING=1)
+  target_include_directories(xtils PUBLIC
+      $<BUILD_INTERFACE:${quickjs_SOURCE_DIR}>)
+endif()
+
 if(BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
@@ -94,7 +113,11 @@ endif()
 include(GNUInstallDirs)
 
 # Install the library
-install(TARGETS xtils
+set(_xtils_install_targets xtils)
+if(SCRIPTING_ENABLE)
+  list(APPEND _xtils_install_targets qjs)
+endif()
+install(TARGETS ${_xtils_install_targets}
     EXPORT xtils-targets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
