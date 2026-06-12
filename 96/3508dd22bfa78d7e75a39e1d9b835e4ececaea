@@ -1,0 +1,40 @@
+tests/scripting_test.cc
+  s_07ef6d8789db4e::t_9009e71619439f 6
+  s_07ef6d8789db4e::t_4ace6e8cd382a6 150-364
+docs/architecture.md
+  s_07ef6d8789db4e::t_b5b74e806286ae 96
+  s_07ef6d8789db4e::t_93e49fd1816b60 80-81
+  s_07ef6d8789db4e::t_4ef0dd5914f323 24-29
+src/scripting/json_interop.cc
+  s_07ef6d8789db4e::t_9e8244237bb9e7 19-43,45-53,55
+  s_07ef6d8789db4e::t_6b79d10ceb0ed0 1-18,44,54,56-230
+docs/README.md
+  s_07ef6d8789db4e::t_f112e89a2978f3 27
+  s_07ef6d8789db4e::t_1af13ee2c0e861 11
+AGENTS.md
+  s_07ef6d8789db4e::t_9ff537c2c9c780 57
+docs/scripting.md
+  s_07ef6d8789db4e::t_1a46da68938c56 1-263
+docs/CHANGELOG.md
+  s_07ef6d8789db4e::t_2bdc5456aaf055 10-24
+CMakeLists.txt
+  s_07ef6d8789db4e::t_f6bf8fdf0e54f6 91
+include/xtils/scripting/json_interop.h
+  s_07ef6d8789db4e::t_62dd8bf664bb98 1-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "963508dd22bfa78d7e75a39e1d9b835e4ececaea",
+  "prompts": {},
+  "sessions": {
+    "s_07ef6d8789db4e": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019ebb3e-2447-7c20-86aa-e541fca5bd05",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Albert Lv <altair.albert@gmail.com>"
+    }
+  }
+}
