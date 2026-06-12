@@ -1,0 +1,30 @@
+examples/CMakeLists.txt
+  s_07ef6d8789db4e::t_b817e342fcca81 46
+  s_07ef6d8789db4e::t_e2fcb41ac75025 42-44,47
+  s_07ef6d8789db4e::t_289f9befcd218d 45
+examples/scripting_bench.cc
+  s_07ef6d8789db4e::t_8fa8295a5afc3c 272-273,275
+  s_07ef6d8789db4e::t_80d6c52e0b4fee 412,440,449
+  s_07ef6d8789db4e::t_5d6aa3e6ae75a4 1-271,274,276-411,413-439,441-448,450-734
+examples/scripting_example.cc
+  s_07ef6d8789db4e::t_6ddd0a70fc5604 1-476
+examples/scripting_compare.cc
+  s_07ef6d8789db4e::t_82f6556271967f 1-614,616,618-678
+  s_07ef6d8789db4e::t_753d790cc8aed7 615,617
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "021e0f2fb3418c9233c31c218e73c2675d031d56",
+  "prompts": {},
+  "sessions": {
+    "s_07ef6d8789db4e": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019ebb3e-2447-7c20-86aa-e541fca5bd05",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Albert Lv <altair.albert@gmail.com>"
+    }
+  }
+}
