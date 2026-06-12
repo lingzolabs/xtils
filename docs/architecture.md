@@ -21,6 +21,12 @@ xtils/
 │   │   ├── udp_client.h / udp_server.h
 │   │   ├── websocket_client.h
 │   │   └── websocket_common.h
+│   ├── scripting/          # Embedded JS engine (opt-in, QuickJS-NG)
+│   │   ├── engine.h        # ScriptEngine — runtime management
+│   │   ├── context.h       # ScriptContext — eval, function registration
+│   │   ├── value.h         # ScriptValue — RAII value wrapper
+│   │   ├── binding.h       # C++ → JS value helpers
+│   │   └── json_interop.h  # Json ↔ ScriptValue conversion
 │   ├── system/             # OS abstractions (event_fd, paged_memory, platform, signal_handler, unix_socket)
 │   ├── tasks/              # Async & scheduling
 │   │   ├── task_runner.h          # Abstract TaskRunner interface
@@ -71,6 +77,8 @@ fsm (fsm, behavior_tree — depends on json, type_traits)
   ↑
 debug (inspect — depends on net, tasks; tracer — standalone)
   ↑
+scripting (opt-in, depends on utils/json; links QuickJS-NG)
+  ↑
 app (app, service — orchestrates all modules)
 ```
 
@@ -85,6 +93,7 @@ app (app, service — orchestrates all modules)
 | `BUILD_WITH_SANITIZERS` | OFF | Enable ASan + UBSan |
 | `TLS_BACKEND` | openssl | TLS backend: `openssl` or `mbedtls` |
 | `INSPECT_DISABLE` | OFF | Disable inspect module (strips all INSPECT_* macros) |
+| `SCRIPTING_ENABLE` | OFF | Enable QuickJS-NG scripting module (fetched via FetchContent) |
 
 ### Build Commands
 

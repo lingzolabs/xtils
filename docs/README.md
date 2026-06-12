@@ -8,6 +8,7 @@
 |----------|-------------|
 | [Architecture](architecture.md) | Project structure, build system, module dependencies |
 | [API Reference](api-reference.md) | Complete public API by module |
+| [Scripting](scripting.md) | QuickJS scripting module — API, usage, performance |
 | [CHANGELOG](CHANGELOG.md) | Version history and breaking changes |
 
 ## Project Summary
@@ -23,6 +24,7 @@
 - **System** — eventfd, paged memory, signal handler, Unix sockets, platform abstraction
 - **Tasks** — TaskRunner, ThreadTaskRunner, UnixTaskRunner, TaskGroup, timers, cron scheduler, events
 - **Utils** — JSON, string, file, base64, SHA1, byte reader/writer, thread-safe queue, weak pointer, scoped RAII
+- **Scripting** — Embedded QuickJS-NG JavaScript engine with C++ binding and Json interop (opt-in)
 - **Debug** — Inspect (HTTP/WS debug server), Tracer (Chrome trace format)
 
 ## Conventions

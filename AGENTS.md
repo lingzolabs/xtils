@@ -54,6 +54,7 @@ clang-format -i src/**/*.cc include/**/*.h
 | `BUILD_WITH_SANITIZERS` | OFF | Enable ASan + UBSan |
 | `TLS_BACKEND` | openssl | TLS backend: `openssl` or `mbedtls` |
 | `INSPECT_DISABLE` | OFF | Disable inspect module |
+| `SCRIPTING_ENABLE` | OFF | Enable QuickJS-NG scripting module |
 
 ## Code Conventions
 

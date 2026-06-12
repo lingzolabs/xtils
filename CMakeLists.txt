@@ -88,7 +88,7 @@ if(SCRIPTING_ENABLE)
   FetchContent_Declare(
     quickjs
     GIT_REPOSITORY https://github.com/quickjs-ng/quickjs.git
-    GIT_TAG v0.15.1
+    GIT_TAG v0.15.1  # fd0a021 (2026-06-04)
   )
   set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
   set(QJS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)

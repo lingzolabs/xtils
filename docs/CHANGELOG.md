@@ -7,6 +7,21 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
+### 2025-06 — Scripting Module (QuickJS-NG)
+
+- **feat(scripting)**: add embedded JavaScript engine via QuickJS-NG v0.15.1
+- **feat(scripting)**: `ScriptEngine` — RAII runtime with memory/stack limits and GC control
+- **feat(scripting)**: `ScriptContext` — JS eval, file loading, native function registration
+- **feat(scripting)**: `ScriptValue` — move-only RAII wrapper with type checks and conversions
+- **feat(scripting)**: `ToScriptValue`/`MakeUndefined`/`MakeNull` binding helpers
+- **feat(scripting)**: `json_interop.h` — bidirectional `Json` ↔ `ScriptValue` conversion
+- **feat(scripting)**: `EvalWithJson` — inject `Json` as global variable and eval code
+- **feat(scripting)**: `EvalToJson` — eval JS and return result as `Json`
+- **feat(scripting)**: `JsonParseViaJs` — fast JSON parsing via QuickJS (2.5x faster than `Json::parse`)
+- **feat(scripting)**: `JsonStringifyViaJs` — stringify with optional pretty-print
+- **build(scripting)**: opt-in via `SCRIPTING_ENABLE=ON`, zero impact when disabled
+- **build(scripting)**: QuickJS-NG fetched via CMake FetchContent (no submodules needed)
+
 ### 2025-05 — Inspect Overhaul
 
 - **refactor(inspect)**: rewrite Impl class — reduce from ~880 to ~330 lines, cleaner architecture
