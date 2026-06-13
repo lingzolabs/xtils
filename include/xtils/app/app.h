@@ -18,10 +18,9 @@ namespace xtils {
 
 class IService;
 class App {
- private:
-  App();
-
  public:
+  // Constructible directly for testing. Use Ins() for the global instance.
+  App();
   ~App();
   static App* Ins();
 
