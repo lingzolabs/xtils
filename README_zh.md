@@ -29,24 +29,30 @@
 ### HTTP 服务
 
 ```cpp
-#include "xtils/app/app.h"
 #include "xtils/net/http_server.h"
 #include "xtils/net/http_router.h"
+#include "xtils/tasks/thread_task_runner.h"
+#include "xtils/system/signal_handler.h"
 
-int main(int argc, char** argv) {
-  xtils::App app;
-  app.Init(argc, argv);
+using namespace xtils;
 
-  auto router = std::make_unique<xtils::HttpRouter>();
-  router->Get("/hello", [](const xtils::HttpRequestContext& ctx,
-                            xtils::HttpResponse& resp) {
+int main() {
+  system::SignalHandler::Initialize();
+  auto task_runner = ThreadTaskRunner::CreateAndStart("http");
+
+  auto router = std::make_unique<HttpRouter>();
+  router->Get("/hello", [](const HttpRequestContext& ctx,
+                            HttpResponse& resp) {
     resp.Json(R"({"message": "Hello, World!"})");
   });
 
-  auto handler = std::make_unique<xtils::RouterHttpRequestHandler>(std::move(router));
-  xtils::HttpServer server(app.task_runner(), handler.get());
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  HttpServer server(&task_runner, handler.get());
   server.Start("0.0.0.0", 8080);
-  app.Run();
+
+  while (!system::SignalHandler::IsShutdownRequested()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  }
 }
 ```
 

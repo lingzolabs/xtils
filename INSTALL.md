@@ -72,78 +72,75 @@ g++ -std=c++17 main.cpp -I/path/xtils/include -L/path/xitls/lib/ -lxtils -o my_a
 
 ### Example Usage in Code
 
+#### HTTP Server (Standalone)
 
 ```cpp
-// simple_service.hpp
-class SimpleService : public xtils::Service {
- public:
-  SimpleService() : xtils::Service("simple") {
-    config.define("params", "params", 0);
-    config.define("p.level.1", "p.level.1", false);
-    config.define("p.level.3", "p.level.3", "string");
+#include "xtils/logging/logger.h"
+#include "xtils/net/http_router.h"
+#include "xtils/net/http_server.h"
+#include "xtils/system/signal_handler.h"
+#include "xtils/tasks/thread_task_runner.h"
+
+using namespace xtils;
+
+int main() {
+  system::SignalHandler::Initialize();
+  auto task_runner = ThreadTaskRunner::CreateAndStart("http");
+
+  auto router = std::make_unique<HttpRouter>();
+  router->Get("/hello", [](const HttpRequestContext& ctx, HttpResponse& resp) {
+    resp.Json(R"({"message":"Hello, World!"})");
+  });
+
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  HttpServer server(&task_runner, handler.get());
+  server.Start("0.0.0.0", 8080);
+
+  LogI("Server running on :8080");
+  while (!system::SignalHandler::IsShutdownRequested()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
-  void init() override { // call by app
-    LogI("Compenets Init");
-    LogI("params is %d", config.get<int>("params").value());
-    for (int i = 0; i < 10; i++)
-      ctx->PostAsyncTask(
-          []() {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            LogI("Run in back");
-          },
-          []() { LogI("Run in main"); });
-    ctx->connect(1, [this](const xtils::Event& e) {
-      LogI("On Event %d", e.id);
-      std::this_thread::sleep_for(std::chrono::seconds(5));
-      ctx->PostAsyncTask([this, e]() { ctx->emit(e); });
-    });
-
-    ctx->PostAsyncTask([this] {
-      TRACE_SCOPE("Task");
-      LogThis();
-    });
-
-    using namespace xtils;
-    for (int i = 0; i <= 10; i++) {
-      auto t1 = steady::GetCurrentMs();
-      int ms = 1000 * i;
-      ctx->delay(ms, [t1, ms] {
-        LogW("Delay %dms: %d", ms, steady::GetCurrentMs() - t1);
-        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-      });
-    }
-  }
-
-  void deinit() override { LogI("Deinit"); }
-};
-```
-
-```cpp
-#include <xtils/app/service.h>
-#include <iostream>
-
-int main(int argc, char** argv) {
-    // Example usage of xtils functionality
-    // (Add specific examples based on your library's API)
-    xtils::init({argv,argv+argc});
-
-    std::cout << "Using xtils library successfully!" << std::endl;
-    auto app = xtils::App::ins();
-    // app->register(s);
-    xtils::run_forever();
-    return 0;
+  return 0;
 }
 ```
 
-or
+#### App Framework (Service-based)
 
 ```cpp
-#include <xtils/app/service.h>
+#include "xtils/app/app.h"
+#include "xtils/app/service.h"
+#include "xtils/logging/logger.h"
 
-// no need main, auto call by framework
+class MyService : public xtils::Service<MyService> {
+ public:
+  MyService() : xtils::Service<MyService>("my_service") {
+    config.Define("port", "server port", 8080);
+  }
+  void Init() override {
+    int port = config.Get<int>("port").value();
+    LogI("Service started on port %d", port);
+  }
+  void Deinit() override { LogI("Service stopped"); }
+};
+
+// Called by the framework (weak main provided by xtils).
 void app_main(xtils::App& ctx, const std::vector<std::string>& args) {
-    // add service
-    // ctx.register(s);
+  ctx.Register(std::make_shared<MyService>());
+}
+```
+
+Alternatively, provide your own `main()`:
+
+```cpp
+#include "xtils/app/app.h"
+#include "xtils/app/service.h"
+
+int main(int argc, char** argv) {
+  xtils::Init({argv, argv + argc});
+  auto app = xtils::App::Ins();
+  app->Register(std::make_shared<MyService>());
+  xtils::RunForever();
+  return 0;
 }
 ```
 

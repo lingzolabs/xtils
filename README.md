@@ -29,24 +29,30 @@ Start an HTTP server in 10 lines. Logging with built-in rotation out of the box.
 ### HTTP Server
 
 ```cpp
-#include "xtils/app/app.h"
 #include "xtils/net/http_server.h"
 #include "xtils/net/http_router.h"
+#include "xtils/tasks/thread_task_runner.h"
+#include "xtils/system/signal_handler.h"
 
-int main(int argc, char** argv) {
-  xtils::App app;
-  app.Init(argc, argv);
+using namespace xtils;
 
-  auto router = std::make_unique<xtils::HttpRouter>();
-  router->Get("/hello", [](const xtils::HttpRequestContext& ctx,
-                            xtils::HttpResponse& resp) {
+int main() {
+  system::SignalHandler::Initialize();
+  auto task_runner = ThreadTaskRunner::CreateAndStart("http");
+
+  auto router = std::make_unique<HttpRouter>();
+  router->Get("/hello", [](const HttpRequestContext& ctx,
+                            HttpResponse& resp) {
     resp.Json(R"({"message": "Hello, World!"})");
   });
 
-  auto handler = std::make_unique<xtils::RouterHttpRequestHandler>(std::move(router));
-  xtils::HttpServer server(app.task_runner(), handler.get());
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  HttpServer server(&task_runner, handler.get());
   server.Start("0.0.0.0", 8080);
-  app.Run();
+
+  while (!system::SignalHandler::IsShutdownRequested()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  }
 }
 ```
 
@@ -135,11 +141,14 @@ std::string output = obj.dump(2);  // Pretty-print with 2-space indent
 | **Net / HTTP** | HTTP Server (router, CORS, WebSocket upgrade, file streaming), HTTP Client (sync/async, multipart, redirect, cookies, SSL) |
 | **Net / WebSocket** | WebSocket Client with auto-reconnect and ping/pong |
 | **Net / TCP & UDP** | TCP Client/Server, UDP Client/Server with multicast support |
+| **Net / IPC** | Unix domain socket IPC channel with length-prefixed framing |
 | **Net / TLS** | OpenSSL and mbedTLS backends |
 | **FSM** | Finite State Machine with history tracking |
 | **Tasks** | TaskRunner (event loop), ThreadTaskRunner, CronScheduler, Timer, TaskGroup, Event |
 | **System** | Signal handling, PagedMemory (mmap with guard pages), Unix sockets, EventFd, platform abstractions |
 | **Behavior Tree** | JSON-driven behavior tree engine: Sequence, Selector, Decorator, SubTree, event system, blackboard, JSONL logging |
+| **Debug** | Inspect (HTTP/WebSocket debug server with route registration), Tracer (Chrome `chrome://tracing` format) |
+| **Scripting** | Embedded QuickJS-NG JavaScript engine with C++ binding and JSON interop (opt-in via `SCRIPTING_ENABLE`) |
 | **Utils** | Lightweight JSON (zero-dep parser/serializer), Base64, SHA1, file utils, string utils, byte reader/writer, time utils, thread-safe wrappers, scoped guard |
 
 ## Build
