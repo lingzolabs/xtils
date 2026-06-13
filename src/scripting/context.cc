@@ -16,21 +16,32 @@ ScriptContext::ScriptContext(JSContext* ctx, bool owned)
 
 ScriptContext::~ScriptContext() {
   if (ctx_ && owned_) {
+    for (auto* p : registered_func_ptrs_) {
+      delete static_cast<NativeFunc*>(p);
+    }
     JS_FreeContext(ctx_);
   }
 }
 
 ScriptContext::ScriptContext(ScriptContext&& other) noexcept
-    : ctx_(other.ctx_), owned_(other.owned_) {
+    : ctx_(other.ctx_),
+      owned_(other.owned_),
+      registered_func_ptrs_(std::move(other.registered_func_ptrs_)) {
   other.ctx_ = nullptr;
   other.owned_ = false;
 }
 
 ScriptContext& ScriptContext::operator=(ScriptContext&& other) noexcept {
   if (this != &other) {
-    if (ctx_ && owned_) JS_FreeContext(ctx_);
+    if (ctx_ && owned_) {
+      for (auto* p : registered_func_ptrs_) {
+        delete static_cast<NativeFunc*>(p);
+      }
+      JS_FreeContext(ctx_);
+    }
     ctx_ = other.ctx_;
     owned_ = other.owned_;
+    registered_func_ptrs_ = std::move(other.registered_func_ptrs_);
     other.ctx_ = nullptr;
     other.owned_ = false;
   }
@@ -60,6 +71,7 @@ void ScriptContext::RegisterFunction(const std::string& name,
   // inside a JSValue passed as closure data to JS_NewCFunctionData.
   // The pointer lives until runtime destruction.
   auto* func_ptr = new NativeFunc(std::move(func));
+  registered_func_ptrs_.push_back(func_ptr);
   JSValue data_val = JS_NewInt64(ctx_, reinterpret_cast<int64_t>(func_ptr));
 
   JSValue fn = JS_NewCFunctionData(

@@ -45,6 +45,7 @@ class ScriptContext {
 
   JSContext* ctx_;
   bool owned_;
+  std::vector<void*> registered_func_ptrs_;
 };
 
 }  // namespace xtils

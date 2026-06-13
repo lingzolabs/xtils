@@ -27,6 +27,7 @@ struct OpaqueData {
   void* ptr;
   bool owned;
   uint32_t class_id;
+  ClassDefData* def;
 };
 
 void ClassFinalizer(JSRuntime* rt, JSValue val) {
@@ -34,12 +35,8 @@ void ClassFinalizer(JSRuntime* rt, JSValue val) {
   OpaqueData* data = static_cast<OpaqueData*>(JS_GetOpaque(val, cid));
   if (!data) return;
 
-  if (data->owned && data->ptr) {
-    auto& registry = ClassRegistry::Instance();
-    auto it = registry.defs.find(data->class_id);
-    if (it != registry.defs.end() && it->second->destructor) {
-      it->second->destructor(data->ptr);
-    }
+  if (data->owned && data->ptr && data->def && data->def->destructor) {
+    data->def->destructor(data->ptr);
   }
   js_free_rt(rt, data);
 }
@@ -49,15 +46,13 @@ JSValue MethodTrampoline(JSContext* ctx, JSValueConst this_val, int argc,
   JSClassID cid = JS_GetClassID(this_val);
   OpaqueData* data =
       static_cast<OpaqueData*>(JS_GetOpaque2(ctx, this_val, cid));
-  if (!data || !data->ptr) return JS_EXCEPTION;
+  if (!data || !data->ptr || !data->def) return JS_EXCEPTION;
 
-  auto& registry = ClassRegistry::Instance();
-  auto it = registry.defs.find(cid);
-  if (it == registry.defs.end()) return JS_EXCEPTION;
-
-  auto& methods = it->second->methods;
+  auto& methods = data->def->methods;
   if (magic < 0 || magic >= static_cast<int>(methods.size()))
     return JS_EXCEPTION;
+
+  if (argc < methods[magic].arg_count) return JS_EXCEPTION;
 
   return methods[magic].func(ctx, data->ptr, argc, argv);
 }
@@ -67,13 +62,9 @@ JSValue PropertyGetTrampoline(JSContext* ctx, JSValueConst this_val,
   JSClassID cid = JS_GetClassID(this_val);
   OpaqueData* data =
       static_cast<OpaqueData*>(JS_GetOpaque2(ctx, this_val, cid));
-  if (!data || !data->ptr) return JS_EXCEPTION;
+  if (!data || !data->ptr || !data->def) return JS_EXCEPTION;
 
-  auto& registry = ClassRegistry::Instance();
-  auto it = registry.defs.find(cid);
-  if (it == registry.defs.end()) return JS_EXCEPTION;
-
-  auto& props = it->second->properties;
+  auto& props = data->def->properties;
   if (magic < 0 || magic >= static_cast<int>(props.size()))
     return JS_EXCEPTION;
 
@@ -85,13 +76,9 @@ JSValue PropertySetTrampoline(JSContext* ctx, JSValueConst this_val,
   JSClassID cid = JS_GetClassID(this_val);
   OpaqueData* data =
       static_cast<OpaqueData*>(JS_GetOpaque2(ctx, this_val, cid));
-  if (!data || !data->ptr) return JS_EXCEPTION;
+  if (!data || !data->ptr || !data->def) return JS_EXCEPTION;
 
-  auto& registry = ClassRegistry::Instance();
-  auto it = registry.defs.find(cid);
-  if (it == registry.defs.end()) return JS_EXCEPTION;
-
-  auto& props = it->second->properties;
+  auto& props = data->def->properties;
   if (magic < 0 || magic >= static_cast<int>(props.size()))
     return JS_EXCEPTION;
   if (!props[magic].setter) return JS_EXCEPTION;
@@ -200,6 +187,7 @@ void RegisterClassImpl(ScriptContext& ctx, std::shared_ptr<ClassDefData> def) {
         opaque->ptr = ptr;
         opaque->owned = true;
         opaque->class_id = cid;
+        opaque->def = it->second.get();
         JS_SetOpaque(obj, opaque);
 
         return obj;
@@ -207,8 +195,8 @@ void RegisterClassImpl(ScriptContext& ctx, std::shared_ptr<ClassDefData> def) {
       def->class_name.c_str(), 0, JS_CFUNC_constructor, 0);
 
   // Store class_id on constructor for retrieval in the ctor trampoline
-  JS_SetPropertyStr(js_ctx, ctor, "__xtils_class_id__",
-                    JS_NewInt64(js_ctx, class_id));
+  JS_DefinePropertyValueStr(js_ctx, ctor, "__xtils_class_id__",
+                            JS_NewInt64(js_ctx, class_id), 0);
 
   // Link constructor ↔ prototype
   JS_SetConstructor(js_ctx, ctor, proto);
@@ -232,11 +220,16 @@ JSValue WrapObjectImpl(ScriptContext& ctx, void* ptr, JSClassID class_id) {
 
   if (JS_IsException(obj)) return JS_EXCEPTION;
 
+  auto& registry = ClassRegistry::Instance();
+  auto it = registry.defs.find(class_id);
+  ClassDefData* def_ptr = (it != registry.defs.end()) ? it->second.get() : nullptr;
+
   OpaqueData* opaque =
       static_cast<OpaqueData*>(js_mallocz(js_ctx, sizeof(OpaqueData)));
   opaque->ptr = ptr;
   opaque->owned = false;  // Non-owning wrap
   opaque->class_id = class_id;
+  opaque->def = def_ptr;
   JS_SetOpaque(obj, opaque);
 
   return obj;
