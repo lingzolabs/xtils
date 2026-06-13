@@ -125,9 +125,10 @@ std::string name = json->get_string("name").value();  // "xtils"
 int64_t ver = json->get_integer("version").value();   // 2
 
 // Build
-xtils::Json obj;
+auto obj = xtils::Json::object();
 obj["status"] = "ok";
 obj["items"] = xtils::Json::array_t{1, 2, 3};
+obj["meta"] = xtils::Json::object();  // nested empty object
 std::string output = obj.dump(2);  // Pretty-print with 2-space indent
 ```
 

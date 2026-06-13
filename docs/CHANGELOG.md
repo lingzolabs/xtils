@@ -7,6 +7,13 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
+### 2025-06 — JSON Ergonomics & Test Stability
+
+- **feat(json)**: add `Json::object()` and `Json::array()` static factory methods for convenient construction
+- **fix(net)**: resolve heap-use-after-free in TcpClient under AddressSanitizer (disconnect race condition)
+- **fix(tasks)**: fix flaky `test_cron_scheduler` by deriving test time from internal nextRun
+- **feat(tasks)**: add `nextRun` field to `CronScheduler::TaskInfo`
+
 ### 2025-06 — Scripting Module (QuickJS-NG)
 
 - **feat(scripting)**: add embedded JavaScript engine via QuickJS-NG v0.15.1

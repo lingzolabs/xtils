@@ -745,6 +745,7 @@ void start();
 void stop();
 bool cancel(TaskID);
 std::optional<TaskInfo> getTaskInfo(TaskID);
+// TaskInfo fields: id, type, active, schedule, lastRun, nextRun
 ```
 
 ### EventManager
@@ -903,6 +904,10 @@ Json(double);              // float
 Json(string/const char*);  // string
 Json(array_t);             // array
 Json(object_t);            // object
+
+// Static factory methods
+static Json object();      // empty object {}
+static Json array();       // empty array []
 
 // Type checks
 is_null(), is_bool(), is_integer(), is_float(), is_number(), is_string(), is_array(), is_object()

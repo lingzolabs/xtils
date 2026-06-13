@@ -149,8 +149,22 @@ TEST_CASE("TCP: single client connect, send, echo") {
                   [&] { return !cli_listener.last_data.empty(); }));
   CHECK(cli_listener.last_data == "ECHO:hello");
 
-  client.Disconnect();
-  server.Stop();
+  // Stop server and disconnect client on the task runner thread to avoid
+  // racing with pending socket events.
+  std::mutex done_mu;
+  std::condition_variable done_cv;
+  bool done = false;
+  tr.PostTask([&]() {
+    client.Disconnect();
+    server.Stop();
+    std::lock_guard<std::mutex> lk(done_mu);
+    done = true;
+    done_cv.notify_all();
+  });
+  {
+    std::unique_lock<std::mutex> lk(done_mu);
+    done_cv.wait_for(lk, std::chrono::milliseconds(2000), [&] { return done; });
+  }
 }
 
 TEST_CASE("TCP: multiple connections and connection count") {
@@ -201,11 +215,21 @@ TEST_CASE("TCP: multiple connections and connection count") {
     CHECK(listeners[i]->last_data == "ECHO:msg" + std::to_string(i));
   }
 
-  // Cleanup: disconnect first, then destroy clients before listeners
-  for (auto& c : clients) c->Disconnect();
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  server.Stop();
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  // Cleanup: disconnect and stop on task runner to avoid UAF
+  std::mutex done_mu;
+  std::condition_variable done_cv;
+  bool done = false;
+  tr.PostTask([&]() {
+    for (auto& c : clients) c->Disconnect();
+    server.Stop();
+    std::lock_guard<std::mutex> lk(done_mu);
+    done = true;
+    done_cv.notify_all();
+  });
+  {
+    std::unique_lock<std::mutex> lk(done_mu);
+    done_cv.wait_for(lk, std::chrono::milliseconds(2000), [&] { return done; });
+  }
   clients.clear();
   listeners.clear();
 }
@@ -253,11 +277,21 @@ TEST_CASE("TCP: broadcast") {
     CHECK(listeners[i]->last_data == "BCAST_MSG");
   }
 
-  // Cleanup: disconnect clients first, then destroy them before listeners
-  for (auto& c : clients) c->Disconnect();
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  server.Stop();
-  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  // Cleanup: disconnect and stop on task runner to avoid UAF
+  std::mutex done_mu;
+  std::condition_variable done_cv;
+  bool done = false;
+  tr.PostTask([&]() {
+    for (auto& c : clients) c->Disconnect();
+    server.Stop();
+    std::lock_guard<std::mutex> lk(done_mu);
+    done = true;
+    done_cv.notify_all();
+  });
+  {
+    std::unique_lock<std::mutex> lk(done_mu);
+    done_cv.wait_for(lk, std::chrono::milliseconds(2000), [&] { return done; });
+  }
   clients.clear();
   listeners.clear();
 }
@@ -284,8 +318,20 @@ TEST_CASE("TCP: client disconnect notification") {
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   CHECK(server.GetConnectionCount() == 1);
 
-  // Disconnect client
-  client.Disconnect();
+  // Disconnect client on task runner thread
+  {
+    std::mutex done_mu;
+    std::condition_variable done_cv;
+    bool done = false;
+    tr.PostTask([&]() {
+      client.Disconnect();
+      std::lock_guard<std::mutex> lk(done_mu);
+      done = true;
+      done_cv.notify_all();
+    });
+    std::unique_lock<std::mutex> lk(done_mu);
+    done_cv.wait_for(lk, std::chrono::milliseconds(2000), [&] { return done; });
+  }
 
   // Wait for server to detect disconnect
   CHECK(WaitUntil(srv_listener.mu, srv_listener.cv,
@@ -295,7 +341,8 @@ TEST_CASE("TCP: client disconnect notification") {
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   CHECK(server.GetConnectionCount() == 0);
 
-  server.Stop();
+  tr.PostTask([&server]() { server.Stop(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
 TEST_CASE("TCP: server stop disconnects clients") {
@@ -323,7 +370,8 @@ TEST_CASE("TCP: server stop disconnects clients") {
   CHECK(WaitUntil(cli_listener.mu, cli_listener.cv,
                   [&] { return cli_listener.disconnected.load(); }));
 
-  client.Disconnect();
+  tr.PostTask([&client]() { client.Disconnect(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
 TEST_CASE("TCP: connect to non-listening port fails") {
@@ -347,6 +395,7 @@ TEST_CASE("TCP: connect to non-listening port fails") {
       3000);
   CHECK(got_failure);
 
-  client.Disconnect();
+  tr.PostTask([&client]() { client.Disconnect(); });
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
