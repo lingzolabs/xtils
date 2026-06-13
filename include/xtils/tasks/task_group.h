@@ -66,6 +66,7 @@ class TaskGroup {
 
   std::shared_ptr<TaskRunner> MainRunner();
 
+#ifdef XTILS_ENABLE_DEPRECATED
   // Deprecated wrappers
   [[deprecated("Use IsBusy() instead")]]
   bool is_busy() { return IsBusy(); }
@@ -79,6 +80,7 @@ class TaskGroup {
   }
   [[deprecated("Use MainRunner() instead")]]
   std::shared_ptr<TaskRunner> main_runner() { return MainRunner(); }
+#endif  // XTILS_ENABLE_DEPRECATED
 
  private:
   void runLoop(int id);

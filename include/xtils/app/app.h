@@ -28,7 +28,7 @@ class App {
   void Register(std::list<std::shared_ptr<IService>> services);
   void Register(std::shared_ptr<IService> p);
 
-  // Deprecated: use Register() instead
+#ifdef XTILS_ENABLE_DEPRECATED
   [[deprecated("Use Register() instead")]]
   void registor(std::list<std::shared_ptr<IService>> services) {
     Register(std::move(services));
@@ -37,6 +37,7 @@ class App {
   void registor(std::shared_ptr<IService> p) {
     Register(std::move(p));
   }
+#endif  // XTILS_ENABLE_DEPRECATED
 
  public:
   // until shutdown
@@ -80,7 +81,8 @@ class App {
 
   const Config& Conf() { return config_; }
 
-  // Deprecated wrappers
+#ifdef XTILS_ENABLE_DEPRECATED
+  // Deprecated wrappers (define XTILS_ENABLE_DEPRECATED to use)
   [[deprecated("Use Ins() instead")]]
   static App* ins() { return Ins(); }
   [[deprecated("Use Run() instead")]]
@@ -112,6 +114,7 @@ class App {
   Subscription connect(TypedCallback cb) { return Connect<Event>(std::move(cb)); }
   [[deprecated("Use Conf() instead")]]
   const Config& conf() { return Conf(); }
+#endif  // XTILS_ENABLE_DEPRECATED
 
  private:
   void deinit();
