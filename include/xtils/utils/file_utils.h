@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+namespace xtils {
 namespace file_utils {
 // Default file size limits to prevent memory exhaustion
 constexpr size_t DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024;  // 100MB
@@ -54,3 +55,7 @@ std::string canonical_path(const std::string& path);
 std::string current_path();
 bool change_directory(const std::string& path);
 }  // namespace file_utils
+}  // namespace xtils
+
+// Backward compatibility: allow unqualified file_utils:: usage
+namespace file_utils = xtils::file_utils;
