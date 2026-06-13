@@ -69,13 +69,13 @@ class App {
   }
 
   template <typename Event, typename TypedCallback>
-  void Connect(Event id, TypedCallback cb) {
-    em_->Connect<Event>(id, cb);
+  Subscription Connect(Event id, TypedCallback cb) {
+    return em_->Connect<Event>(id, cb);
   }
 
   template <typename Event, typename TypedCallback>
-  void Connect(TypedCallback cb) {
-    em_->Connect<Event>(cb);
+  Subscription Connect(TypedCallback cb) {
+    return em_->Connect<Event>(cb);
   }
 
   const Config& Conf() { return config_; }
@@ -106,10 +106,10 @@ class App {
   void emit(const Event& e) { Emit<Event>(e); }
   template <typename Event, typename TypedCallback>
   [[deprecated("Use Connect() instead")]]
-  void connect(Event id, TypedCallback cb) { Connect<Event>(id, std::move(cb)); }
+  Subscription connect(Event id, TypedCallback cb) { return Connect<Event>(id, std::move(cb)); }
   template <typename Event, typename TypedCallback>
   [[deprecated("Use Connect() instead")]]
-  void connect(TypedCallback cb) { Connect<Event>(std::move(cb)); }
+  Subscription connect(TypedCallback cb) { return Connect<Event>(std::move(cb)); }
   [[deprecated("Use Conf() instead")]]
   const Config& conf() { return Conf(); }
 

@@ -1,5 +1,5 @@
 /*
- * Description: DOC
+ * Description: Type-safe event system with subscription management
  *
  * Copyright (c) 2018 - 2024 Albert Lv <altair.albert@gmail.com>
  *
@@ -7,9 +7,7 @@
  * license information.
  *
  * Author: Albert Lv <altair.albert@gmail.com>
- * Version: 0.0.0
- *
- * Changelog:
+ * Version: 2.0.0
  */
 
 #pragma once
@@ -25,6 +23,7 @@
 #include <unordered_map>
 
 #include "xtils/tasks/task_group.h"
+#include "xtils/utils/signal.h"
 #include "xtils/utils/type_traits.h"
 
 namespace xtils {
@@ -50,30 +49,54 @@ class EventManager {
   template <typename EventT>
   using TypedCallback = std::function<void(const EventT&)>;
 
-  // Use enable_if as a non-type template parameter (int = 0) so the
-  // function templates have distinct signatures and do not collide.
+  // Connect with subscription handle (new API)
   template <typename T, std::enable_if_t<!std::is_enum_v<T>, int> = 0>
-  void Connect(TypedCallback<T> cb) {
+  Subscription Connect(TypedCallback<T> cb) {
     std::type_index type = std::type_index(typeid(T));
-    maps_[type].emplace_back(
-        [cb](const void* e) { cb(*static_cast<const T*>(e)); });
+    auto slot = std::make_shared<SlotEntry>();
+    slot->id = next_id_++;
+    slot->callback = [cb](const void* e) { cb(*static_cast<const T*>(e)); };
+
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    maps_[type].push_back(slot);
+
+    auto weak = std::weak_ptr<SlotEntry>(slot);
+    auto impl = std::make_shared<EventSubImpl>(this, type, slot->id, weak);
+    return MakeSubscription(std::move(impl));
   }
 
   template <typename T, std::enable_if_t<std::is_enum_v<T>, int> = 0>
-  void Connect(T id, TypedCallback<T> cb) {
+  Subscription Connect(T id, TypedCallback<T> cb) {
     std::uint32_t uid = static_cast<std::uint32_t>(id);
-    enum_maps_[uid].emplace_back(
-        [cb](const void* e) { cb(*static_cast<const T*>(e)); });
+    auto slot = std::make_shared<SlotEntry>();
+    slot->id = next_id_++;
+    slot->callback = [cb](const void* e) { cb(*static_cast<const T*>(e)); };
+
+    std::lock_guard<std::mutex> lock(enum_map_mutex_);
+    enum_maps_[uid].push_back(slot);
+
+    auto weak = std::weak_ptr<SlotEntry>(slot);
+    auto impl =
+        std::make_shared<EnumEventSubImpl>(this, uid, slot->id, weak);
+    return MakeSubscription(std::move(impl));
   }
 
   template <typename T, std::enable_if_t<!std::is_enum_v<T>, int> = 0>
   void Emit(const T& e) {
     if (stop_) return;
     std::type_index type = std::type_index(typeid(T));
-    std::lock_guard<std::mutex> lock(map_mutex_);
-    auto it = maps_.find(type);
-    if (it != maps_.end()) {
-      dispatch(it->second, e);
+    std::vector<OnEvent> cbs;
+    {
+      std::lock_guard<std::mutex> lock(map_mutex_);
+      auto it = maps_.find(type);
+      if (it != maps_.end()) {
+        for (auto& slot : it->second) {
+          if (slot) cbs.push_back(slot->callback);
+        }
+      }
+    }
+    for (auto& cb : cbs) {
+      tg_->PostAsyncTask([e, cb] { cb(&e); });
     }
   }
 
@@ -81,10 +104,18 @@ class EventManager {
   void Emit(const T& e) {
     if (stop_) return;
     std::uint32_t uid = static_cast<std::uint32_t>(e);
-    std::lock_guard<std::mutex> lock(enum_map_mutex_);
-    auto it = enum_maps_.find(uid);
-    if (it != enum_maps_.end()) {
-      dispatch(it->second, e);
+    std::vector<OnEvent> cbs;
+    {
+      std::lock_guard<std::mutex> lock(enum_map_mutex_);
+      auto it = enum_maps_.find(uid);
+      if (it != enum_maps_.end()) {
+        for (auto& slot : it->second) {
+          if (slot) cbs.push_back(slot->callback);
+        }
+      }
+    }
+    for (auto& cb : cbs) {
+      tg_->PostAsyncTask([e, cb] { cb(&e); });
     }
   }
 
@@ -93,38 +124,75 @@ class EventManager {
     tg_->Stop();
   }
 
-  // Deprecated wrappers
-  template <typename T, std::enable_if_t<!std::is_enum_v<T>, int> = 0>
-  [[deprecated("Use Connect() instead")]]
-  void connect(TypedCallback<T> cb) { Connect<T>(std::move(cb)); }
-  template <typename T, std::enable_if_t<std::is_enum_v<T>, int> = 0>
-  [[deprecated("Use Connect() instead")]]
-  void connect(T id, TypedCallback<T> cb) { Connect<T>(id, std::move(cb)); }
-  template <typename T, std::enable_if_t<!std::is_enum_v<T>, int> = 0>
-  [[deprecated("Use Emit() instead")]]
-  void emit(const T& e) { Emit<T>(e); }
-  template <typename T, std::enable_if_t<std::is_enum_v<T>, int> = 0>
-  [[deprecated("Use Emit() instead")]]
-  void emit(const T& e) { Emit<T>(e); }
-  [[deprecated("Use Stop() instead")]]
-  void stop() { Stop(); }
-
  private:
-  using Callbacks = std::list<OnEvent>;
-  template <typename T>
-  // copy cbs for threads safe
-  void dispatch(Callbacks cbs, const T& e) {
-    for (auto& cb : cbs) {
-      tg_->PostAsyncTask([e, cb] { cb(&e); });
+  struct SlotEntry {
+    uint64_t id = 0;
+    OnEvent callback;
+  };
+
+  using SlotList = std::list<std::shared_ptr<SlotEntry>>;
+
+  void RemoveTypedSlot(std::type_index type, uint64_t id) {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    auto it = maps_.find(type);
+    if (it != maps_.end()) {
+      it->second.remove_if(
+          [id](const std::shared_ptr<SlotEntry>& s) { return s && s->id == id; });
     }
+  }
+
+  void RemoveEnumSlot(uint32_t uid, uint64_t id) {
+    std::lock_guard<std::mutex> lock(enum_map_mutex_);
+    auto it = enum_maps_.find(uid);
+    if (it != enum_maps_.end()) {
+      it->second.remove_if(
+          [id](const std::shared_ptr<SlotEntry>& s) { return s && s->id == id; });
+    }
+  }
+
+  struct EventSubImpl : Subscription::IImpl {
+    EventManager* mgr;
+    std::type_index type;
+    uint64_t slot_id;
+    std::weak_ptr<SlotEntry> weak;
+
+    EventSubImpl(EventManager* m, std::type_index t, uint64_t id,
+                 std::weak_ptr<SlotEntry> w)
+        : mgr(m), type(t), slot_id(id), weak(std::move(w)) {}
+
+    void disconnect() override {
+      if (mgr && !weak.expired()) mgr->RemoveTypedSlot(type, slot_id);
+    }
+    bool connected() const override { return !weak.expired(); }
+  };
+
+  struct EnumEventSubImpl : Subscription::IImpl {
+    EventManager* mgr;
+    uint32_t uid;
+    uint64_t slot_id;
+    std::weak_ptr<SlotEntry> weak;
+
+    EnumEventSubImpl(EventManager* m, uint32_t u, uint64_t id,
+                     std::weak_ptr<SlotEntry> w)
+        : mgr(m), uid(u), slot_id(id), weak(std::move(w)) {}
+
+    void disconnect() override {
+      if (mgr && !weak.expired()) mgr->RemoveEnumSlot(uid, slot_id);
+    }
+    bool connected() const override { return !weak.expired(); }
+  };
+
+  static Subscription MakeSubscription(std::shared_ptr<Subscription::IImpl> impl) {
+    return Subscription(std::move(impl));
   }
 
  private:
   std::atomic_bool stop_{false};
   std::mutex map_mutex_;
-  std::unordered_map<std::type_index, Callbacks> maps_;
+  std::unordered_map<std::type_index, SlotList> maps_;
   std::mutex enum_map_mutex_;
-  std::map<std::uint32_t, Callbacks> enum_maps_;
+  std::map<std::uint32_t, SlotList> enum_maps_;
   std::shared_ptr<TaskGroup> tg_;
+  std::atomic<uint64_t> next_id_{1};
 };
 }  // namespace xtils
