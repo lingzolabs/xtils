@@ -43,6 +43,7 @@ file(GLOB_RECURSE SRCS src/*.cc)
 
 # Create a single library
 add_library(xtils STATIC ${SRCS})
+target_link_libraries(xtils PUBLIC xtils-autogen)
 target_include_directories(xtils PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -116,7 +117,7 @@ endif()
 include(GNUInstallDirs)
 
 # Install the library
-set(_xtils_install_targets xtils)
+set(_xtils_install_targets xtils xtils-autogen)
 if(SCRIPTING_ENABLE)
   list(APPEND _xtils_install_targets qjs)
 endif()
@@ -159,7 +160,5 @@ configure_package_config_file(
 install(FILES
     ${CMAKE_CURRENT_BINARY_DIR}/xtils-config.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/xtils-config-version.cmake
-    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/xtils-autogen.cmake
-    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/xtils
 )

@@ -20,10 +20,10 @@
 - **FSM** — finite state machine with guards, actions, history, Graphviz export
 - **Behavior Tree** — JSON-driven BT with blackboard, ports, subtrees, events
 - **Logging** — async/sync logger with console & rotating file sinks, watchdog
-- **Networking** — TCP/UDP client & server, HTTP client & server, WebSocket client, TLS support, routing
+- **Networking** — TCP/UDP client & server, HTTP client & server, WebSocket client, TLS support, routing, JSON-RPC IPC
 - **System** — eventfd, paged memory, signal handler, Unix sockets, platform abstraction
-- **Tasks** — TaskRunner, ThreadTaskRunner, UnixTaskRunner, TaskGroup, timers, cron scheduler, events
-- **Utils** — JSON, string, file, base64, SHA1, byte reader/writer, thread-safe queue, weak pointer, scoped RAII
+- **Tasks** — TaskRunner, ThreadTaskRunner, UnixTaskRunner, TaskGroup, timers, cron scheduler, events, Future/Promise
+- **Utils** — JSON, Result, Signal, Serialize, Clock, string, file, base64, SHA1, byte reader/writer, thread-safe queue, weak pointer, scoped RAII
 - **Scripting** — Embedded QuickJS-NG JavaScript engine with C++ binding and Json interop (opt-in)
 - **Debug** — Inspect (HTTP/WS debug server), Tracer (Chrome trace format)
 
@@ -32,5 +32,6 @@
 - Namespace: `xtils::` (sub-namespaces: `xtils::fsm::`, `xtils::logger::`, `xtils::debug::`)
 - API style: **PascalCase** methods (e.g. `AddState()`, `GetString()`)
 - Legacy **snake_case** methods exist with `[[deprecated]]` wrappers — use PascalCase
+- Known historical exceptions: `CronScheduler` uses lowercase methods (`every()`, `cron()`, `start()`, `stop()`, `cancel()`, `getTaskInfo()`)
 - Headers: `#pragma once`, path `xtils/<module>/<file>.h`
 - Source files: `.cc`; headers: `.h`

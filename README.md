@@ -68,11 +68,13 @@ LogE("Connection failed: %s", error.c_str());
 ### Cron Task
 
 ```cpp
+#include "xtils/tasks/cron_scheduler.h"
+
 xtils::CronScheduler scheduler;
-scheduler.AddTask("*/5 * * * * *", []() {  // Every 5 seconds
+scheduler.every(xtils::CronScheduler::Seconds(5), []() {
   LogI("Heartbeat check");
 });
-scheduler.Start();
+scheduler.start();
 ```
 
 ### Behavior Tree (JSON-driven)

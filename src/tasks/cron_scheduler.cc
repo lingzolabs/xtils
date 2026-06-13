@@ -62,13 +62,11 @@ std::optional<CronScheduler::TaskInfo> CronScheduler::getTaskInfo(TaskID id) {
     info.id = t.id;
     info.active = t.active;
     info.type = (t.type == TaskType::Interval ? "Interval" : "Cron");
-    info.lastRun = t.lastRun.time_since_epoch().count()
-                       ? Clock::to_time_t(t.lastRun)
-                       : 0;
+    info.lastRun =
+        t.lastRun.time_since_epoch().count() ? Clock::to_time_t(t.lastRun) : 0;
     info.schedule = describeTask(t);
-    info.nextRun = t.nextRun.time_since_epoch().count()
-                       ? Clock::to_time_t(t.nextRun)
-                       : 0;
+    info.nextRun =
+        t.nextRun.time_since_epoch().count() ? Clock::to_time_t(t.nextRun) : 0;
     return info;
   }
   return std::nullopt;
@@ -95,7 +93,7 @@ std::tm CronScheduler::toLocalTm(TimePoint tp, int tzOffsetMinutes) {
 }
 
 CronScheduler::TimePoint CronScheduler::fromLocalTm(std::tm tm,
-                                                     int tzOffsetMinutes) {
+                                                    int tzOffsetMinutes) {
   std::time_t tt = timegm(&tm) - tzOffsetMinutes * 60;
   return Clock::from_time_t(tt);
 }
@@ -155,7 +153,7 @@ void CronScheduler::schedulerThread() {
 }
 
 CronScheduler::TimePoint CronScheduler::calcNextRunTime(const Task& t,
-                                                         TimePoint from) {
+                                                        TimePoint from) {
   if (t.type == TaskType::Interval) return from + t.interval;
 
   std::tm tm = toLocalTm(from + Seconds(1), tzOffsetMinutes_);
@@ -263,18 +261,21 @@ std::string CronScheduler::describeTask(const Task& t) {
     return r;
   };
   return "cron " + setToStr(t.seconds) + " " + setToStr(t.minutes) + " " +
-         setToStr(t.hours) + " " + setToStr(t.days) + " " +
-         setToStr(t.months) + " " + setToStr(t.weekdays);
+         setToStr(t.hours) + " " + setToStr(t.days) + " " + setToStr(t.months) +
+         " " + setToStr(t.weekdays);
 }
 
 void CronScheduler::runOnce(TimePoint now) {
   std::vector<std::function<void()>> toRun;
-  for (auto& [_, t] : tasks_) {
-    if (!t.active) continue;
-    if (t.nextRun <= now) {
-      t.lastRun = t.nextRun;
-      t.nextRun = calcNextRunTime(t, now);
-      toRun.push_back(t.fn);
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (auto& [_, t] : tasks_) {
+      if (!t.active) continue;
+      if (t.nextRun <= now) {
+        t.lastRun = t.nextRun;
+        t.nextRun = calcNextRunTime(t, now);
+        toRun.push_back(t.fn);
+      }
     }
   }
   for (auto& fn : toRun) {

@@ -6,6 +6,7 @@
 #include <future>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 #include "xtils/tasks/task_runner.h"
@@ -23,7 +24,7 @@ class TaskGroup {
   static std::unique_ptr<TaskGroup> Parallel(
       int size = std::thread::hardware_concurrency(),
       std::shared_ptr<TaskRunner> runner = nullptr) {
-    return std::make_unique<TaskGroup>(0, runner);
+    return std::make_unique<TaskGroup>(size, runner);
   }
 
  public:
@@ -88,6 +89,7 @@ class TaskGroup {
  private:
   std::atomic_bool quit_{false};
   std::atomic_int pending_tasks_{0};
+  std::mutex state_mutex_;
   ThreadSafe<std::list<Task>> tasks_;
   std::list<std::thread> threads_;
   std::atomic_int exit_id_{-1};

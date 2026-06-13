@@ -101,6 +101,34 @@ TEST_CASE_FIXTURE(TaskGroupTestFixture,
 }
 
 TEST_CASE_FIXTURE(TaskGroupTestFixture,
+                  "TaskGroup: Parallel honors requested size") {
+  auto tg = TaskGroup::Parallel(2);
+  CHECK(tg->Size() == 2);
+  tg->Stop();
+}
+
+TEST_CASE_FIXTURE(TaskGroupTestFixture,
+                  "TaskGroup: delayed task is not busy until queued") {
+  auto tg = std::make_shared<TaskGroup>(1);
+  tg->PostAsyncTask([]() {}, 200);
+
+  CHECK_FALSE(tg->IsBusy());
+  tg->Stop();
+}
+
+TEST_CASE_FIXTURE(TaskGroupTestFixture,
+                  "TaskGroup: StopWaitAll cancels future delayed work") {
+  auto tg = std::make_shared<TaskGroup>(1);
+  std::atomic<bool> executed{false};
+  tg->PostAsyncTask([&]() { executed = true; }, 50);
+
+  CHECK(tg->StopWaitAll(std::chrono::seconds(1)));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK_FALSE(executed);
+  CHECK_FALSE(tg->IsBusy());
+}
+
+TEST_CASE_FIXTURE(TaskGroupTestFixture,
                   "TaskGroup: Sequential shares main_runner") {
   auto async_tg = std::make_shared<TaskGroup>(2);
   auto sync_tg = TaskGroup::Sequential(async_tg->MainRunner());

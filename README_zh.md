@@ -68,11 +68,13 @@ LogE("Connection failed: %s", error.c_str());
 ### 定时任务
 
 ```cpp
+#include "xtils/tasks/cron_scheduler.h"
+
 xtils::CronScheduler scheduler;
-scheduler.AddTask("*/5 * * * * *", []() {  // 每 5 秒执行
+scheduler.every(xtils::CronScheduler::Seconds(5), []() {
   LogI("Heartbeat check");
 });
-scheduler.Start();
+scheduler.start();
 ```
 
 ### 行为树（JSON 驱动）

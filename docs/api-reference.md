@@ -114,6 +114,17 @@ void Print() const;
 
 **CLI parsing**: Supports `--config-file <path>` to load JSON first, then CLI args override.
 
+**Required options**: `Define(..., required=true)` does **not** write the default value into `data_`. The default value is used as the type hint for CLI parsing and for help text; the value must be supplied by JSON, CLI, or `Set()` before `Validate()` passes.
+
+```cpp
+Config c;
+c.Define("token", "API token", "", true);
+CHECK_FALSE(c.Has("token"));
+CHECK_FALSE(c.Validate());
+c.Set("token", "secret");
+CHECK(c.Validate());
+```
+
 ---
 
 ## 3. FSM (`fsm/`)
@@ -576,6 +587,33 @@ void SetMaxMessageSize(size_t);
 void SetVerifySSL(bool);
 ```
 
+### JSON-RPC IPC over Unix Sockets
+
+```cpp
+#include "xtils/net/ipc_channel.h"
+
+// Server side
+IpcServer server("/tmp/app.sock");
+server.Register("echo", [](const Json& params) -> Result<Json> {
+  return params;
+});
+server.OnNotify("event", [](const Json& params) { /* no response */ });
+server.Start();
+server.Notify("broadcast", Json::object());
+server.Stop();
+
+// Client side
+IpcClient client("/tmp/app.sock");
+client.Connect();
+Result<Json> r = client.Call("echo", Json::object(), 5000);
+client.CallAsync("echo", Json::object(), [](Result<Json> r) {});
+client.Notify("event", Json::object());
+Subscription sub = client.OnNotify("broadcast", [](auto method, auto params) {});
+client.Disconnect();
+```
+
+Wire format is newline-delimited JSON-RPC 2.0. Requests include `jsonrpc`, `id`, `method`, and optional `params`; notifications omit `id` and do not receive a response.
+
 ### Multipart Parser
 
 ```cpp
@@ -704,6 +742,13 @@ bool StopWaitAll(timeout=5s);
 std::shared_ptr<TaskRunner> MainRunner();
 ```
 
+Semantics:
+- `Parallel(size)` creates exactly `size` worker threads; `size <= 0` falls back to hardware concurrency.
+- `PostAsyncTask(task, 0)` counts as busy until the worker task finishes.
+- `PostAsyncTask(task, delay_ms)` is scheduled on the main runner and becomes busy only when it is queued to workers after the delay. This avoids treating future timers as current work.
+- `Stop()` / `StopWaitAll()` prevent not-yet-due delayed worker tasks from being queued later.
+- `StopWaitAll()` waits for currently queued/running worker tasks, then stops worker threads. It does not wait for arbitrary `PostTask()` work on `MainRunner()`.
+
 ### Timer
 
 ```cpp
@@ -745,8 +790,15 @@ void start();
 void stop();
 bool cancel(TaskID);
 std::optional<TaskInfo> getTaskInfo(TaskID);
+void triggerCheck(TimePoint now);  // testMode only
 // TaskInfo fields: id, type, active, schedule, lastRun, nextRun
 ```
+
+Usage notes:
+- `every()` schedules fixed intervals from creation time.
+- `cron()` accepts one `std::set<int>` per field: seconds, minutes, hours, days, months, weekdays; an empty set means wildcard.
+- In `testMode=true`, no worker thread is started; call `triggerCheck(now)` with a synthetic `TimePoint` to deterministically execute due jobs.
+- Public method names are lowercase for historical compatibility.
 
 ### EventManager
 
@@ -765,6 +817,24 @@ void Emit<T>(const T& e);
 
 void Stop();
 ```
+
+### Future / Promise
+
+```cpp
+#include "xtils/tasks/future.h"
+
+Promise<int> p;
+Future<int> f = p.GetFuture();
+Future<int> next = f.Then([](int v) { return v + 1; });
+f.OnError([](const Error& e) {});
+p.SetValue(42);
+
+Promise<void> pv;
+Future<void> fv = pv.GetFuture();
+pv.SetError(Error("failed"));
+```
+
+`Future<T>` is chainable rather than blocking: use `Then()` for value continuations, `OnError()` for error handling, and `IsReady()`/`HasValue()`/`HasError()` for state checks. Continuations can run inline or through an optional `TaskGroup` executor.
 
 ---
 
@@ -936,6 +1006,77 @@ bool empty() const;
 void clear();
 void erase(key_or_index);
 ```
+
+### Result
+
+```cpp
+#include "xtils/utils/result.h"
+
+Result<int> ParseInt(std::string_view s) {
+  if (s.empty()) return Err("empty input");
+  return Ok(42);
+}
+
+auto r = ParseInt("42");
+if (r) {
+  int value = *r;
+} else {
+  LogE("%s", r.error().message.c_str());
+}
+
+Result<void> ok = Ok();
+Result<Json> bad = Err(1001, "bad params");
+```
+
+### Signal
+
+```cpp
+#include "xtils/utils/signal.h"
+
+Signal<int> changed;
+Subscription sub = changed.Connect([](int v) {});
+changed.Emit(1);
+sub.Disconnect();
+
+ScopedSubscriptions subs;
+subs += changed.Connect([](int v) {});
+subs.DisconnectAll();
+```
+
+`Subscription` is move-only and disconnects automatically on destruction unless `Detach()` is called.
+
+### Serialize
+
+```cpp
+#include "xtils/utils/serialize.h"
+
+struct User {
+  int id = 0;
+  std::string name;
+  XTILS_SERIALIZABLE(User, id, name)
+};
+
+User u{1, "alice"};
+Json j = u.ToJson();
+auto parsed = User::FromJson(j);
+```
+
+Also provides `xtils::serialize::to_json()` / `from_json()` overloads for primitive types, strings, vectors, `Json`, and custom types with `ToJson()` / `FromJson()`.
+
+### Clock
+
+```cpp
+#include "xtils/utils/clock.h"
+
+IClock* clock = RealClock::Instance();
+uint64_t now_ms = clock->SteadyNowMs();
+
+FakeClock fake;
+fake.Advance(1000);
+fake.SetSystem(1700000000000ULL);
+```
+
+`IClock` is a small dependency-injection interface for code that needs testable time. `RealClock` uses `std::chrono`; `FakeClock` advances only when explicitly told. Current `Timer` and `CronScheduler` APIs still use their existing clock/timepoint types directly.
 
 ### String Utils
 

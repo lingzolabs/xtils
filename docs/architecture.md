@@ -20,7 +20,8 @@ xtils/
 │   │   ├── tcp_client.h / tcp_server.h
 │   │   ├── udp_client.h / udp_server.h
 │   │   ├── websocket_client.h
-│   │   └── websocket_common.h
+│   │   ├── websocket_common.h
+│   │   └── ipc_channel.h       # JSON-RPC 2.0 IPC over Unix sockets
 │   ├── scripting/          # Embedded JS engine (opt-in, QuickJS-NG)
 │   │   ├── engine.h        # ScriptEngine — runtime management
 │   │   ├── context.h       # ScriptContext — eval, function registration
@@ -35,9 +36,14 @@ xtils/
 │   │   ├── task_group.h           # Sequential/parallel task groups
 │   │   ├── timer.h                # Steady & system clock timers
 │   │   ├── cron_scheduler.h       # Cron-style job scheduler
-│   │   └── event.h                # Typed event manager
+│   │   ├── event.h                # Typed event manager
+│   │   └── future.h               # Future/Promise with continuations
 │   └── utils/              # General utilities
 │       ├── json.h           # Custom JSON implementation
+│       ├── result.h         # Result<T>/Error expected-style return values
+│       ├── signal.h         # Object-level signals and RAII subscriptions
+│       ├── serialize.h      # Json serialization helpers/macros
+│       ├── clock.h          # IClock, RealClock, FakeClock
 │       ├── string_utils.h   # String operations
 │       ├── file_utils.h     # File I/O & path operations
 │       ├── base64.h / sha1.h
@@ -117,7 +123,7 @@ find_package(xtils REQUIRED)
 target_link_libraries(myapp xtils::xtils)
 ```
 
-The library exports `cxx_std_17` as a public compile feature — consumers automatically get C++17.
+The library exports `cxx_std_17` as a public compile feature — consumers automatically get C++17. The generated version-symbol archive (`xtils-autogen`) is exported as part of `xtils::xtils`, so C++-only downstream projects do not need to include xtils CMake helper scripts.
 
 ## TLS Backend
 

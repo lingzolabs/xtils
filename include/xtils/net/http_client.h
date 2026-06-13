@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "xtils/net/http_common.h"
@@ -220,6 +221,14 @@ class HttpClient : public TransportEventListener {
 
   void CheckBufferSizeLimit();
 
+  struct LifetimeToken {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool alive = true;
+    size_t active_callbacks = 0;
+    std::thread::id callback_thread;
+  };
+
   // Request state - encapsulated to avoid forgetting to reset
   struct RequestState {
     HttpRequest request;
@@ -282,6 +291,10 @@ class HttpClient : public TransportEventListener {
   std::map<std::string, std::map<std::string, std::string>> cookies_;
 
   bool connection_reusable_;
+  std::atomic<uint64_t> request_generation_{0};
+  std::atomic<uint64_t> active_request_generation_{0};
+
+  std::shared_ptr<LifetimeToken> lifetime_;
 
   // Synchronization for sync Request() method
   std::mutex sync_mutex_;

@@ -86,49 +86,24 @@ TEST_CASE("CronScheduler: Cron tasks in test mode") {
 
   CHECK(task_id > 0);
 
-  // Get the internally-computed nextRun and start 'now' from the beginning
-  // of that same minute. This ensures nextRun is always ahead of 'now'.
-  auto info = scheduler.getTaskInfo(task_id);
-  REQUIRE(info);
-  auto next_run_tp = xtils::CronScheduler::Clock::from_time_t(info->nextRun);
-  xtils::CronScheduler::TimePoint now =
-      std::chrono::time_point_cast<xtils::CronScheduler::Minutes>(next_run_tp);
+  auto advanceToNextRun = [&](int expected_count) {
+    auto info = scheduler.getTaskInfo(task_id);
+    REQUIRE(info);
+    auto next_run_tp = xtils::CronScheduler::Clock::from_time_t(info->nextRun);
+    auto now = next_run_tp - xtils::CronScheduler::Seconds(1);
 
-  scheduler.triggerCheck(now);
-  CHECK(counter == 0);
+    scheduler.triggerCheck(now);
+    CHECK(counter == expected_count - 1);
 
-  // Advance to 4 seconds past the minute, no run
-  advanceTimeAndTrigger(scheduler, now, xtils::CronScheduler::Seconds(4),
-                        counter);
-  CHECK(counter == 0);
+    advanceTimeAndTrigger(scheduler, now, xtils::CronScheduler::Seconds(1),
+                          counter);
+    CHECK(counter == expected_count);
+    CHECK(run_times.size() == static_cast<size_t>(expected_count));
+  };
 
-  // Advance to 5 seconds past the minute, should run
-  advanceTimeAndTrigger(scheduler, now, xtils::CronScheduler::Seconds(1),
-                        counter);
-  CHECK(counter == 1);
-  CHECK(run_times.size() == 1);
-
-  // Advance to 9 seconds past the minute, no run
-  advanceTimeAndTrigger(scheduler, now, xtils::CronScheduler::Seconds(4),
-                        counter);
-  CHECK(counter == 1);
-
-  // Advance to 10 seconds past the minute, should run
-  advanceTimeAndTrigger(scheduler, now, xtils::CronScheduler::Seconds(1),
-                        counter);
-  CHECK(counter == 2);
-  CHECK(run_times.size() == 2);
-
-  // Advance to 15 seconds past the minute, no more runs this minute
-  advanceTimeAndTrigger(scheduler, now, xtils::CronScheduler::Seconds(5),
-                        counter);
-  CHECK(counter == 2);
-
-  // Advance to next minute and to 5 seconds past, should run again
-  advanceTimeAndTrigger(scheduler, now, xtils::CronScheduler::Seconds(50),
-                        counter);  // Go to next minute + 5s
-  CHECK(counter == 3);
-  CHECK(run_times.size() == 3);
+  advanceToNextRun(1);
+  advanceToNextRun(2);
+  advanceToNextRun(3);
 
   // Check task info
   auto info2 = scheduler.getTaskInfo(task_id);

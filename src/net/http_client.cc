@@ -7,6 +7,7 @@
 #include "xtils/net/http_common.h"
 #include "xtils/net/transport/plain_tcp_transport.h"
 #include "xtils/net/transport/tls_factory.h"
+#include "xtils/utils/scoped.h"
 #include "xtils/utils/string_utils.h"
 
 namespace xtils {
@@ -70,14 +71,25 @@ HttpClient::HttpClient(TaskRunner* task_runner)
       follow_redirects_(true),
       max_redirects_(5),
       keep_alive_(true),
+      max_receive_buffer_size_(100 * 1024 * 1024),
       verify_ssl_(true),
       ssl_cert_path_(),
-      max_receive_buffer_size_(100 * 1024 * 1024),
-      connection_reusable_(false) {
+      connection_reusable_(false),
+      lifetime_(std::make_shared<LifetimeToken>()) {
   SetUserAgent("xtils/1.0");
 }
 
-HttpClient::~HttpClient() { Cancel(); }
+HttpClient::~HttpClient() {
+  {
+    std::unique_lock<std::mutex> lock(lifetime_->mutex);
+    lifetime_->alive = false;
+    if (lifetime_->callback_thread != std::this_thread::get_id()) {
+      lifetime_->cv.wait(lock,
+                         [this]() { return lifetime_->active_callbacks == 0; });
+    }
+  }
+  Cancel();
+}
 
 HttpResponse HttpClient::Request(const HttpRequest& request) {
   current_.Reset();
@@ -108,12 +120,13 @@ HttpResponse HttpClient::Request(const HttpRequest& request) {
 
 bool HttpClient::RequestAsync(const HttpRequest& request,
                               HttpClientEventListener* listener) {
-  listener_ = listener;
   if (IsBusy()) {
     return false;
   }
 
+  listener_ = listener;
   current_.Reset();
+  active_request_generation_.store(request_generation_.fetch_add(1) + 1);
   current_.request = request;
   current_.timeout_ms =
       request.timeout_ms > 0 ? request.timeout_ms : default_timeout_ms_;
@@ -291,9 +304,27 @@ void HttpClient::OnConnected(bool success) {
 
   // Schedule timeout
   if (current_.timeout_ms > 0 && !current_.timeout_scheduled.exchange(true)) {
+    auto lifetime = lifetime_;
+    const uint64_t generation = active_request_generation_.load();
     task_runner_->PostDelayedTask(
-        [this]() {
-          if (IsBusy() && !current_.completed.load()) {
+        [this, lifetime, generation]() {
+          {
+            std::lock_guard<std::mutex> lock(lifetime->mutex);
+            if (!lifetime->alive) return;
+            ++lifetime->active_callbacks;
+            lifetime->callback_thread = std::this_thread::get_id();
+          }
+          Scoped callback_guard([lifetime]() {
+            std::lock_guard<std::mutex> lock(lifetime->mutex);
+            if (lifetime->active_callbacks > 0) --lifetime->active_callbacks;
+            if (lifetime->active_callbacks == 0) {
+              lifetime->callback_thread = std::thread::id();
+              lifetime->cv.notify_all();
+            }
+          });
+
+          if (active_request_generation_.load() == generation && IsBusy() &&
+              !current_.completed.load()) {
             HandleError("Request timeout");
           }
         },
@@ -553,22 +584,19 @@ void HttpClient::ProcessChunkedBody() {
       current_.receive_buffer.erase(0, chunk_size_end + 2);
     }
 
-    // Handle the final chunk (chunk size 0)
+    // Handle the final chunk (chunk size 0). The remaining bytes are trailers,
+    // not response body. Wait until the trailer section terminates.
     if (current_.chunk_size == 0) {
-      size_t trailer_end = current_.receive_buffer.find("\r\n");
-      if (trailer_end != std::string::npos) {
-        int size = current_.receive_buffer.size() - trailer_end;
-        current_.bytes_received += size;
-        if (listener_) {
-          listener_->OnProgress(this, current_.bytes_received, -1);
-        }
-        if (listener_ && !listener_->OnBodyData(
-                             this, current_.receive_buffer.data(), size)) {
-        } else {
-          current_.response.body.append(current_.receive_buffer.data(), size);
-        }
-        current_.receive_buffer.clear();
+      if (current_.receive_buffer.size() >= 2 &&
+          current_.receive_buffer.compare(0, 2, "\r\n") == 0) {
+        current_.receive_buffer.erase(0, 2);
         CompleteRequest();
+      } else {
+        size_t trailer_end = current_.receive_buffer.find("\r\n\r\n");
+        if (trailer_end != std::string::npos) {
+          current_.receive_buffer.erase(0, trailer_end + 4);
+          CompleteRequest();
+        }
       }
       return;
     }
@@ -696,13 +724,11 @@ void HttpClient::CompleteRequest() {
   // Mark as completed
   current_.completed.store(true);
   last_response_ = current_.response;
+  HttpResponse response = current_.response;
+  HttpClientEventListener* listener = listener_;
 
-  // Notify listener
-  if (listener_) {
-    listener_->OnHttpResponse(this, current_.response);
-  }
-
-  // Notify sync waiters
+  // Notify sync waiters before external callbacks. This keeps the object from
+  // touching members after a listener decides to destroy the client.
   {
     std::lock_guard<std::mutex> lock(sync_mutex_);
     sync_cv_.notify_all();
@@ -710,6 +736,11 @@ void HttpClient::CompleteRequest() {
 
   // Reset state
   state_.store(State::kIdle);
+
+  // Notify listener last; listener code may delete this object.
+  if (listener) {
+    listener->OnHttpResponse(this, response);
+  }
 }
 
 void HttpClient::HandleError(const std::string& error) {
@@ -719,18 +750,22 @@ void HttpClient::HandleError(const std::string& error) {
 
   current_.completed.store(true);
   last_response_ = current_.response;
+  HttpClientEventListener* listener = listener_;
+  std::string error_copy = error;
 
-  if (listener_) {
-    listener_->OnHttpError(this, error);
-  }
-
-  // Notify sync waiters
+  // Notify sync waiters before external callbacks. This keeps the object from
+  // touching members after a listener decides to destroy the client.
   {
     std::lock_guard<std::mutex> lock(sync_mutex_);
     sync_cv_.notify_all();
   }
 
   state_.store(State::kIdle);
+
+  // Notify listener last; listener code may delete this object.
+  if (listener) {
+    listener->OnHttpError(this, error_copy);
+  }
 }
 
 bool HttpClient::ConnectToHost(const HttpUrl& url) {

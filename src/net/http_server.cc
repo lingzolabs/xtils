@@ -158,6 +158,7 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
   bool has_origin = false;
   HttpRequest http_req(conn);
   size_t body_size = 0;
+  conn->origin_allowed_.clear();
   LogT("%s", std::string(buf_view).c_str());
 
   // This loop parses the HTTP request headers and sets the |body_offset|.
@@ -198,15 +199,14 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
       auto hdr_name = line.substr(0, col);
       std::string hdr_value_storage =
           TrimWhitespace(std::string(line.substr(col + 1)));
-      std::string_view hdr_value(hdr_value_storage);
-      if (http_req.num_headers < http_req.headers.size()) {
-        http_req.headers[http_req.num_headers++] = {std::string(hdr_name),
-                                                    hdr_value_storage};
-      } else {
+      if (http_req.num_headers >= http_req.headers.size()) {
         conn->SendResponseAndClose("400 Bad Request", {},
                                    "Too many HTTP headers");
         return 0;
       }
+      auto& stored_header = http_req.headers[http_req.num_headers++];
+      stored_header = {std::string(hdr_name), std::move(hdr_value_storage)};
+      std::string_view hdr_value(stored_header.value);
 
       if (CaseInsensitiveEq(hdr_name, "content-length")) {
         auto parsed = StringViewToUInt64(hdr_value);
@@ -479,7 +479,7 @@ void HttpServerConnection::SendResponseHeaders(const char* http_code,
   content_len_actual_ = 0;
   content_len_headers_ = content_length;
   if (content_length != kOmitContentLength) {
-    StackString<128> hdr_str("Content-Length: %d", content_length);
+    StackString<128> hdr_str("Content-Length: %zu", content_length);
     append(hdr_str.ToStr().c_str());
     append("\r\n");
   }

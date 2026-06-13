@@ -7,6 +7,16 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
+### 2026-06 — Review Defects & Documentation
+
+- **fix(http)**: reset per-request CORS state on keep-alive connections and avoid dangling `Origin` string_view
+- **fix(http)**: prevent `HttpClient` timeout callbacks from accessing destroyed clients; preserve listener on rejected concurrent async requests
+- **fix(http)**: avoid appending chunked transfer final trailers to response body
+- **fix(tasks)**: make `TaskGroup::Parallel(size)` honor requested worker count and clarify delayed-task busy semantics
+- **fix(tasks)**: make `CronScheduler` test-mode checks deterministic and lock task map during `triggerCheck()`
+- **fix(cmake)**: export `xtils-autogen` as an installed target instead of regenerating it in downstream packages
+- **docs**: correct Cron examples and expand AI-facing API coverage for Config, Tasks, IPC, Result, Signal, Serialize, Clock, and install behavior
+
 ### 2025-06 — JSON Ergonomics & Test Stability
 
 - **feat(json)**: add `Json::object()` and `Json::array()` static factory methods for convenient construction
