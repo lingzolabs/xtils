@@ -1,0 +1,28 @@
+include/xtils/scripting/class_binding.h
+  s_07ef6d8789db4e::t_52d8dd26eac533 131,147,158-163,165-167,194-198,217-218,304-308,311,317,327,333-338,340,343-347
+  s_07ef6d8789db4e::t_adffa1f7ddce8a 1-130,132-146,148-157,164,168-193,199-216,219-303,309-310,312-316,318-326,328-332,339,341-342,348-351
+tests/scripting_test.cc
+  s_07ef6d8789db4e::t_9c712284613787 365-579
+src/scripting/class_binding.cc
+  s_07ef6d8789db4e::t_3546b649dc6554 5
+  s_07ef6d8789db4e::t_9dfef89c36a582 129,131,138,140-147,150-154,156,158-159
+  s_07ef6d8789db4e::t_1615f40e666022 132-135,148-149,155,157,160
+  s_07ef6d8789db4e::t_16d894407116bf 1-4,6-27,29-33,36-38,40-96,98-104,106-119,121-125,127-128,130,136-137,139,161-167,169-177,179-181,188-196,198-208,210-223,225-237,239-254
+  s_07ef6d8789db4e::t_243bbab1302028 28,34-35,39,97,105,120,126,168,178,182-187,197,209,224,238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "109dbcbdb7bbdba1862f0ef3a0ae9cbe9a86c9a1",
+  "prompts": {},
+  "sessions": {
+    "s_07ef6d8789db4e": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "019ebb3e-2447-7c20-86aa-e541fca5bd05",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Albert Lv <altair.albert@gmail.com>"
+    }
+  }
+}
