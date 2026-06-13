@@ -28,6 +28,7 @@ class CronScheduler {
     bool active;
     std::string schedule;
     std::time_t lastRun;
+    std::time_t nextRun;
   };
 
   explicit CronScheduler(int tzOffsetMinutes = 0, bool testMode = false);

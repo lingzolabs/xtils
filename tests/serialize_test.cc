@@ -101,7 +101,7 @@ TEST_CASE("Serialize: FromJson with invalid input") {
 }
 
 TEST_CASE("Serialize: FromJson with missing fields uses defaults") {
-  Json j = Json::object_t{};
+  Json j = Json::object();
   j["x"] = Json(static_cast<int64_t>(5));
   // y is missing — should remain default (0)
 

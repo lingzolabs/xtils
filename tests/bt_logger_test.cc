@@ -54,7 +54,7 @@ TEST_CASE("BtFileLogger: structured JSONL output") {
   // Simulate tree construction → update()
   Json tree;
   tree["name"] = "test_tree";
-  tree["root"] = Json::object_t{};
+  tree["root"] = Json::object();
   logger->update(tree);
 
   // Build a minimal tree and tick it

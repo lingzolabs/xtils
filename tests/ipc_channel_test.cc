@@ -51,14 +51,14 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: JSON-RPC 2.0 method call") {
     auto a = params.get_integer("a");
     auto b = params.get_integer("b");
     if (!a || !b) return Err(jsonrpc::kInvalidParams, "missing a or b");
-    Json result(Json::object_t{});
+    Json result = Json::object();
     result["sum"] = Json(*a + *b);
     return result;
   });
 
   StartAndConnect();
 
-  Json params(Json::object_t{});
+  Json params = Json::object();
   params["a"] = Json(static_cast<int64_t>(3));
   params["b"] = Json(static_cast<int64_t>(4));
 
@@ -100,7 +100,7 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: client notification to server") {
 
   StartAndConnect();
 
-  Json params(Json::object_t{});
+  Json params = Json::object();
   params["msg"] = Json(std::string("hello"));
   CHECK(client_.Notify("ping", params));
 
@@ -123,7 +123,7 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: server notification to client") {
         got_data = params.get_string("status").value_or("");
       });
 
-  Json params(Json::object_t{});
+  Json params = Json::object();
   params["status"] = Json(std::string("ready"));
   server_.Notify("status_update", params);
 
@@ -166,13 +166,13 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: multiple clients") {
 
   CHECK(server_.ClientCount() == 2);
 
-  Json p1(Json::object_t{});
+  Json p1 = Json::object();
   p1["id"] = Json(std::string("c1"));
   auto r1 = client_.Call("echo", p1);
   REQUIRE(r1.ok());
   CHECK(r1->get_string("id").value_or("") == "c1");
 
-  Json p2(Json::object_t{});
+  Json p2 = Json::object();
   p2["id"] = Json(std::string("c2"));
   auto r2 = client2.Call("echo", p2);
   REQUIRE(r2.ok());
@@ -185,7 +185,7 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: async call") {
   server_.Register("slow", [](const Json& params) -> Result<Json> {
     (void)params;
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    Json r(Json::object_t{});
+    Json r = Json::object();
     r["done"] = Json(true);
     return r;
   });
@@ -193,7 +193,7 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: async call") {
   StartAndConnect();
 
   std::atomic<bool> got_result{false};
-  client_.CallAsync("slow", Json::object_t{}, [&](Result<Json> r) {
+  client_.CallAsync("slow", Json::object(), [&](Result<Json> r) {
     CHECK(r.ok());
     CHECK(r->get_bool("done").value_or(false) == true);
     got_result = true;
@@ -212,7 +212,7 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: call timeout") {
 
   StartAndConnect();
 
-  auto result = client_.Call("hang", Json::object_t{}, 50);
+  auto result = client_.Call("hang", Json::object(), 50);
   CHECK(!result.ok());
   CHECK(result.error().message == "timeout");
 }

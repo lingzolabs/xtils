@@ -152,7 +152,21 @@ static SimpleHttpResponse DoHttpRequest(ThreadTaskRunner& tr, uint16_t port,
   }
 
   auto resp = listener.ParseResponse();
-  client.Disconnect();
+  // Disconnect on the task runner thread to avoid race with pending events
+  std::mutex disconnect_mu;
+  std::condition_variable disconnect_cv;
+  bool disconnect_done = false;
+  tr.PostTask([&client, &disconnect_mu, &disconnect_cv, &disconnect_done]() {
+    client.Disconnect();
+    std::lock_guard<std::mutex> lock(disconnect_mu);
+    disconnect_done = true;
+    disconnect_cv.notify_all();
+  });
+  {
+    std::unique_lock<std::mutex> lock(disconnect_mu);
+    disconnect_cv.wait_for(lock, std::chrono::milliseconds(1000),
+                           [&] { return disconnect_done; });
+  }
   return resp;
 }
 

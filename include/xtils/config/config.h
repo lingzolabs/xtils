@@ -46,7 +46,7 @@ class Config {
     }
   };
 
-  Config() : data_(Json::object_t{}) {}
+  Config() : data_(Json::object()) {}
 
   // Configuration definition
   Config& Define(const std::string& name, const std::string& description,

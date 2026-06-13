@@ -97,7 +97,7 @@ size_t IpcServer::ClientCount() const {
 }
 
 void IpcServer::Notify(const std::string& method, const Json& params) {
-  Json msg(Json::object_t{});
+  Json msg = Json::object();
   msg["jsonrpc"] = Json(std::string(kJsonRpcVersion));
   msg["method"] = Json(method);
   msg["params"] = params;
@@ -157,10 +157,10 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
   auto msg = Json::parse(line);
   if (!msg || !msg->is_object()) {
     // JSON-RPC 2.0: Parse error
-    Json response(Json::object_t{});
+    Json response = Json::object();
     response["jsonrpc"] = Json(std::string(kJsonRpcVersion));
     response["id"] = Json(nullptr);
-    Json err_obj(Json::object_t{});
+    Json err_obj = Json::object();
     err_obj["code"] = Json(static_cast<int64_t>(jsonrpc::kParseError));
     err_obj["message"] = Json(std::string("Parse error"));
     response["error"] = std::move(err_obj);
@@ -177,10 +177,10 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
   auto method_ptr = msg->find("method");
   if (!method_ptr || !method_ptr->is_string()) {
     // Invalid Request
-    Json response(Json::object_t{});
+    Json response = Json::object();
     response["jsonrpc"] = Json(std::string(kJsonRpcVersion));
     response["id"] = msg->get("id").value_or(Json(nullptr));
-    Json err_obj(Json::object_t{});
+    Json err_obj = Json::object();
     err_obj["code"] = Json(static_cast<int64_t>(jsonrpc::kInvalidRequest));
     err_obj["message"] = Json(std::string("Invalid Request"));
     response["error"] = std::move(err_obj);
@@ -189,7 +189,7 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
   }
 
   std::string method = method_ptr->as_string();
-  Json params = msg->get("params").value_or(Json(Json::object_t{}));
+  Json params = msg->get("params").value_or(Json::object());
 
   // Check if it's a notification (no "id" field)
   auto id_ptr = msg->find("id");
@@ -215,7 +215,7 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
     }
   }
 
-  Json response(Json::object_t{});
+  Json response = Json::object();
   response["jsonrpc"] = Json(std::string(kJsonRpcVersion));
   response["id"] = *id_ptr;
 
@@ -224,13 +224,13 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
     if (result.ok()) {
       response["result"] = *result;
     } else {
-      Json err_obj(Json::object_t{});
+      Json err_obj = Json::object();
       err_obj["code"] = Json(static_cast<int64_t>(result.error().code));
       err_obj["message"] = Json(result.error().message);
       response["error"] = std::move(err_obj);
     }
   } else {
-    Json err_obj(Json::object_t{});
+    Json err_obj = Json::object();
     err_obj["code"] = Json(static_cast<int64_t>(jsonrpc::kMethodNotFound));
     err_obj["message"] = Json("Method not found: " + method);
     response["error"] = std::move(err_obj);
@@ -308,7 +308,7 @@ Result<Json> IpcClient::Call(const std::string& method, const Json& params,
   if (!connected_) return Err("not connected");
 
   uint64_t id = next_id_++;
-  Json msg(Json::object_t{});
+  Json msg = Json::object();
   msg["jsonrpc"] = Json(std::string(kJsonRpcVersion));
   msg["id"] = Json(static_cast<int64_t>(id));
   msg["method"] = Json(method);
@@ -345,7 +345,7 @@ void IpcClient::CallAsync(const std::string& method, const Json& params,
   }
 
   uint64_t id = next_id_++;
-  Json msg(Json::object_t{});
+  Json msg = Json::object();
   msg["jsonrpc"] = Json(std::string(kJsonRpcVersion));
   msg["id"] = Json(static_cast<int64_t>(id));
   msg["method"] = Json(method);
@@ -379,7 +379,7 @@ void IpcClient::CallAsync(const std::string& method, const Json& params,
 bool IpcClient::Notify(const std::string& method, const Json& params) {
   if (!connected_) return false;
 
-  Json msg(Json::object_t{});
+  Json msg = Json::object();
   msg["jsonrpc"] = Json(std::string(kJsonRpcVersion));
   msg["method"] = Json(method);
   msg["params"] = params;
@@ -454,7 +454,7 @@ void IpcClient::HandleMessage(const std::string& line) {
   if (method_ptr && method_ptr->is_string() && !id_ptr) {
     // Server notification
     std::string method = method_ptr->as_string();
-    Json params = msg->get("params").value_or(Json(Json::object_t{}));
+    Json params = msg->get("params").value_or(Json::object());
     notify_signal_.Emit(method, params);
     {
       std::lock_guard<std::mutex> lock(notify_signals_mu_);

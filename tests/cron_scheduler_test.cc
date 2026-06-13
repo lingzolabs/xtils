@@ -79,7 +79,6 @@ TEST_CASE("CronScheduler: Cron tasks in test mode") {
 
   // Schedule to run at 5 and 10 seconds past the minute
   std::set<int> seconds_to_run = {5, 10};
-  auto current_time_point = getCurrentTime();
   auto task_id = scheduler.cron(seconds_to_run, {}, {}, {}, {}, {}, [&]() {
     counter++;
     run_times.push_back(getCurrentTime());
@@ -87,17 +86,13 @@ TEST_CASE("CronScheduler: Cron tasks in test mode") {
 
   CHECK(task_id > 0);
 
-  // Initialize now to a minute boundary (e.g., xx:yy:00)
-  xtils::CronScheduler::TimePoint now = getCurrentTime();
-
-  std::tm tm_now = xtils::CronScheduler::toLocalTm(current_time_point, 0);
-  now = std::chrono::time_point_cast<xtils::CronScheduler::Minutes>(
-      current_time_point);
-  if (tm_now.tm_sec >= 5) {  // make sure we're at the next minute boundary
-    now = std::chrono::time_point_cast<xtils::CronScheduler::Minutes>(
-        current_time_point + std::chrono::minutes(1));
-  }
-  tm_now = xtils::CronScheduler::toLocalTm(now, 0);
+  // Get the internally-computed nextRun and start 'now' from the beginning
+  // of that same minute. This ensures nextRun is always ahead of 'now'.
+  auto info = scheduler.getTaskInfo(task_id);
+  REQUIRE(info);
+  auto next_run_tp = xtils::CronScheduler::Clock::from_time_t(info->nextRun);
+  xtils::CronScheduler::TimePoint now =
+      std::chrono::time_point_cast<xtils::CronScheduler::Minutes>(next_run_tp);
 
   scheduler.triggerCheck(now);
   CHECK(counter == 0);
@@ -136,13 +131,13 @@ TEST_CASE("CronScheduler: Cron tasks in test mode") {
   CHECK(run_times.size() == 3);
 
   // Check task info
-  auto info = scheduler.getTaskInfo(task_id);
-  REQUIRE(info);
-  CHECK(info->id == task_id);
-  CHECK(info->type == "Cron");
-  CHECK(info->active == true);
-  CHECK(info->schedule == "cron 5,10 * * * * *");
-  CHECK(info->lastRun != 0);
+  auto info2 = scheduler.getTaskInfo(task_id);
+  REQUIRE(info2);
+  CHECK(info2->id == task_id);
+  CHECK(info2->type == "Cron");
+  CHECK(info2->active == true);
+  CHECK(info2->schedule == "cron 5,10 * * * * *");
+  CHECK(info2->lastRun != 0);
 
   scheduler.stop();
 }

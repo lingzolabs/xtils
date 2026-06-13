@@ -193,7 +193,7 @@ bool from_json(const Json& j, std::vector<T>& vec) {
 //
 #define XTILS_SERIALIZABLE(Type, ...)                                       \
   xtils::Json ToJson() const {                                             \
-    xtils::Json j = xtils::Json::object_t{};                               \
+    xtils::Json j = xtils::Json::object();                               \
     _XTILS_DISPATCH(_XTILS_FIELD_TO_JSON_, _XTILS_NARG(__VA_ARGS__))       \
     (__VA_ARGS__);                                                          \
     return j;                                                              \

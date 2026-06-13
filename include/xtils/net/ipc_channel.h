@@ -62,7 +62,7 @@ class IpcServer {
   void OnNotify(const std::string& method, NotifyHandler handler);
 
   // Send a JSON-RPC 2.0 notification to all connected clients
-  void Notify(const std::string& method, const Json& params = Json::object_t{});
+  void Notify(const std::string& method, const Json& params = Json::object());
 
   // Start listening
   bool Start();
@@ -113,7 +113,7 @@ class IpcClient {
 
   // Synchronous JSON-RPC 2.0 call with timeout
   Result<Json> Call(const std::string& method,
-                   const Json& params = Json::object_t{},
+                   const Json& params = Json::object(),
                    uint32_t timeout_ms = 5000);
 
   // Async JSON-RPC 2.0 call
@@ -121,7 +121,7 @@ class IpcClient {
                  std::function<void(Result<Json>)> callback);
 
   // Send a notification (no response expected)
-  bool Notify(const std::string& method, const Json& params = Json::object_t{});
+  bool Notify(const std::string& method, const Json& params = Json::object());
 
   // Subscribe to incoming notifications from server
   Subscription OnNotify(const std::string& method, NotifyCallback cb);

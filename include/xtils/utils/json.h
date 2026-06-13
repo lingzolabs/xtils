@@ -199,6 +199,10 @@ class Json {
   static Json parse(const std::string& text, std::error_code& ec);
   static std::optional<Json> parse(const std::string& text);
 
+  // Factory methods
+  static Json object() { return Json(object_t{}); }
+  static Json array() { return Json(array_t{}); }
+
  private:
   JsonType type_;
   JsonValueUnion data_;

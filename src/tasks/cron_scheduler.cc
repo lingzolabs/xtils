@@ -66,6 +66,9 @@ std::optional<CronScheduler::TaskInfo> CronScheduler::getTaskInfo(TaskID id) {
                        ? Clock::to_time_t(t.lastRun)
                        : 0;
     info.schedule = describeTask(t);
+    info.nextRun = t.nextRun.time_since_epoch().count()
+                       ? Clock::to_time_t(t.nextRun)
+                       : 0;
     return info;
   }
   return std::nullopt;

@@ -219,7 +219,7 @@ void Config::Set(const std::string& path, const Json& value) {
 
   // Ensure data_ is an object
   if (!data_.is_object()) {
-    data_ = Json::object_t{};
+    data_ = Json::object();
   }
 
   Json* current = &data_;
@@ -227,19 +227,19 @@ void Config::Set(const std::string& path, const Json& value) {
   // Navigate to the parent of the target key
   for (size_t i = 0; i < parts.size() - 1; ++i) {
     if (!current->is_object()) {
-      *current = Json::object_t{};
+      *current = Json::object();
     }
 
     // Get or create the nested object
     if (!current->has_key(parts[i])) {
-      (*current)[parts[i]] = Json::object_t{};
+      (*current)[parts[i]] = Json::object();
     }
     current = &(*current)[parts[i]];
   }
 
   // Ensure the current level is an object
   if (!current->is_object()) {
-    *current = Json::object_t{};
+    *current = Json::object();
   }
 
   // Set the final value
