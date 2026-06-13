@@ -362,3 +362,218 @@ TEST_CASE("Json <-> ScriptValue: round-trip") {
   CHECK(converted["tags"][0].as_string() == "a");
   CHECK(converted["address"]["city"].as_string() == "Beijing");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ClassBinding Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#include "xtils/scripting/class_binding.h"
+
+// Test class: a simple 2D vector
+class Vec2 {
+ public:
+  Vec2() : x_(0), y_(0) {}
+  Vec2(double x, double y) : x_(x), y_(y) {}
+
+  double GetX() const { return x_; }
+  double GetY() const { return y_; }
+  void SetX(double x) { x_ = x; }
+  void SetY(double y) { y_ = y; }
+
+  double Length() const { return std::sqrt(x_ * x_ + y_ * y_); }
+  double Dot(double ox, double oy) const { return x_ * ox + y_ * oy; }
+  void Scale(double factor) { x_ *= factor; y_ *= factor; }
+
+  std::string ToString() const {
+    return "Vec2(" + std::to_string(x_) + ", " + std::to_string(y_) + ")";
+  }
+
+ private:
+  double x_, y_;
+};
+
+// Test class: a counter with state
+class Counter {
+ public:
+  Counter() : count_(0) {}
+  explicit Counter(int32_t initial) : count_(initial) {}
+
+  void Increment() { count_++; }
+  void Add(int32_t n) { count_ += n; }
+  int32_t GetCount() const { return count_; }
+  void Reset() { count_ = 0; }
+
+ private:
+  int32_t count_;
+};
+
+TEST_CASE("ClassBinding: basic constructor and methods") {
+  ScriptEngine engine;
+  auto ctx = engine.CreateContext();
+
+  ClassBinding<Vec2>::Define(*ctx, "Vec2")
+      .Constructor<double, double>()
+      .Method("length", &Vec2::Length)
+      .Method("dot", &Vec2::Dot)
+      .Method("scale", &Vec2::Scale)
+      .Method("toString", &Vec2::ToString)
+      .Property("x", &Vec2::GetX, &Vec2::SetX)
+      .Property("y", &Vec2::GetY, &Vec2::SetY)
+      .Register();
+
+  // Create from JS
+  auto r1 = ctx->Eval("let v = new Vec2(3, 4); v.length()");
+  CHECK(r1.ToDouble() == doctest::Approx(5.0));
+
+  // Access properties
+  auto r2 = ctx->Eval("v.x");
+  CHECK(r2.ToDouble() == doctest::Approx(3.0));
+
+  auto r3 = ctx->Eval("v.y");
+  CHECK(r3.ToDouble() == doctest::Approx(4.0));
+
+  // Set properties
+  auto r4 = ctx->Eval("v.x = 10; v.x");
+  CHECK(r4.ToDouble() == doctest::Approx(10.0));
+
+  // Call method with args
+  auto r5 = ctx->Eval("v.dot(1, 0)");
+  CHECK(r5.ToDouble() == doctest::Approx(10.0));
+
+  // Mutating method
+  ctx->Eval("v.scale(2)");
+  auto r6 = ctx->Eval("v.x");
+  CHECK(r6.ToDouble() == doctest::Approx(20.0));
+}
+
+TEST_CASE("ClassBinding: default constructor") {
+  ScriptEngine engine;
+  auto ctx = engine.CreateContext();
+
+  ClassBinding<Counter>::Define(*ctx, "Counter")
+      .DefaultConstructor()
+      .Method("increment", &Counter::Increment)
+      .Method("add", &Counter::Add)
+      .Method("reset", &Counter::Reset)
+      .PropertyReadonly("count", &Counter::GetCount)
+      .Register();
+
+  auto r1 = ctx->Eval("let c = new Counter(); c.count");
+  CHECK(r1.ToInt() == 0);
+
+  ctx->Eval("c.increment(); c.increment(); c.increment()");
+  auto r2 = ctx->Eval("c.count");
+  CHECK(r2.ToInt() == 3);
+
+  ctx->Eval("c.add(10)");
+  auto r3 = ctx->Eval("c.count");
+  CHECK(r3.ToInt() == 13);
+
+  ctx->Eval("c.reset()");
+  auto r4 = ctx->Eval("c.count");
+  CHECK(r4.ToInt() == 0);
+}
+
+TEST_CASE("ClassBinding: multiple instances") {
+  ScriptEngine engine;
+  auto ctx = engine.CreateContext();
+
+  ClassBinding<Vec2>::Define(*ctx, "Vec2")
+      .Constructor<double, double>()
+      .Method("length", &Vec2::Length)
+      .Property("x", &Vec2::GetX, &Vec2::SetX)
+      .Property("y", &Vec2::GetY, &Vec2::SetY)
+      .Register();
+
+  ctx->Eval("let a = new Vec2(1, 0); let b = new Vec2(0, 1)");
+  auto r1 = ctx->Eval("a.x");
+  CHECK(r1.ToDouble() == doctest::Approx(1.0));
+  auto r2 = ctx->Eval("b.y");
+  CHECK(r2.ToDouble() == doctest::Approx(1.0));
+
+  // Modify one doesn't affect the other
+  ctx->Eval("a.x = 99");
+  auto r3 = ctx->Eval("b.x");
+  CHECK(r3.ToDouble() == doctest::Approx(0.0));
+}
+
+TEST_CASE("ClassBinding: WrapObject (non-owning)") {
+  ScriptEngine engine;
+  auto ctx = engine.CreateContext();
+
+  ClassBinding<Vec2>::Define(*ctx, "Vec2")
+      .Constructor<double, double>()
+      .Method("length", &Vec2::Length)
+      .Property("x", &Vec2::GetX, &Vec2::SetX)
+      .Property("y", &Vec2::GetY, &Vec2::SetY)
+      .Register();
+
+  // Create a C++ object
+  Vec2 cpp_vec(7, 24);
+
+  // Wrap it for JS (non-owning)
+  ScriptValue wrapped = WrapObject(*ctx, &cpp_vec);
+  CHECK_FALSE(wrapped.IsException());
+
+  // Inject into JS global
+  JSValue global = JS_GetGlobalObject(ctx->Raw());
+  JS_SetPropertyStr(ctx->Raw(), global, "wrapped",
+                    JS_DupValue(ctx->Raw(), wrapped.Raw()));
+  JS_FreeValue(ctx->Raw(), global);
+
+  // Access from JS
+  auto r1 = ctx->Eval("wrapped.length()");
+  CHECK(r1.ToDouble() == doctest::Approx(25.0));
+
+  // Modify from JS
+  ctx->Eval("wrapped.x = 100");
+
+  // Verify C++ object was modified
+  CHECK(cpp_vec.GetX() == doctest::Approx(100.0));
+}
+
+TEST_CASE("ClassBinding: UnwrapObject") {
+  ScriptEngine engine;
+  auto ctx = engine.CreateContext();
+
+  ClassBinding<Vec2>::Define(*ctx, "Vec2")
+      .Constructor<double, double>()
+      .Property("x", &Vec2::GetX, &Vec2::SetX)
+      .Property("y", &Vec2::GetY, &Vec2::SetY)
+      .Register();
+
+  // Create in JS
+  auto val = ctx->Eval("new Vec2(42, 99)");
+  CHECK_FALSE(val.IsException());
+
+  // Unwrap to C++ pointer
+  Vec2* ptr = UnwrapObject<Vec2>(val);
+  CHECK(ptr != nullptr);
+  CHECK(ptr->GetX() == doctest::Approx(42.0));
+  CHECK(ptr->GetY() == doctest::Approx(99.0));
+}
+
+TEST_CASE("ClassBinding: use in JS expressions") {
+  ScriptEngine engine;
+  auto ctx = engine.CreateContext();
+
+  ClassBinding<Vec2>::Define(*ctx, "Vec2")
+      .Constructor<double, double>()
+      .Method("length", &Vec2::Length)
+      .Method("toString", &Vec2::ToString)
+      .Property("x", &Vec2::GetX, &Vec2::SetX)
+      .Property("y", &Vec2::GetY, &Vec2::SetY)
+      .Register();
+
+  // Use in array
+  auto r1 = ctx->Eval(
+      "let vecs = [new Vec2(1,0), new Vec2(0,1), new Vec2(3,4)];"
+      "vecs.map(v => v.length())");
+  CHECK(r1.IsArray());
+
+  // Use in computation
+  auto r2 = ctx->Eval(
+      "let sum = vecs.reduce((s, v) => s + v.length(), 0);"
+      "sum");
+  CHECK(r2.ToDouble() == doctest::Approx(1.0 + 1.0 + 5.0));
+}
