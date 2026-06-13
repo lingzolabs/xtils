@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 
-#include "xtils/net/http_client.h"
 #include "xtils/net/http_common.h"
 #include "xtils/net/transport/transport.h"
 #include "xtils/net/websocket_common.h"
@@ -47,8 +46,7 @@ class WebSocketClientEventListener {
                                const std::string& data) {}
 };
 
-class WebSocketClient : public HttpClientEventListener,
-                        public TransportEventListener {
+class WebSocketClient : public TransportEventListener {
  public:
   enum class State {
     kDisconnected = 0,
@@ -109,12 +107,7 @@ class WebSocketClient : public HttpClientEventListener,
   void SetSSLCertificate(const std::string& cert_path);
 
  private:
-  // HttpClientEventListener implementation
-  void OnHttpResponse(HttpClient* client,
-                      const HttpResponse& response) override;
-  void OnHttpError(HttpClient* client, const std::string& error) override;
-
-  // TcpClientEventListener implementation
+  // TransportEventListener implementation
   void OnConnected(bool success) override;
   void OnDataReceived(const void* data, size_t len) override;
   void OnDisconnected() override;

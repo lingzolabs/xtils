@@ -7,6 +7,14 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
+### 2026-06 — Net API Cleanup & Examples
+
+- **refactor(net)!**: move HTTP client public types under `HttpClient` (`HttpClient::Request`, `HttpClient::Response`, `HttpClient::Listener`, `HttpClient::MultipartField`, `HttpClient::MultipartFile`) and rename the generic synchronous request entry point to `HttpClient::Send()`.
+- **refactor(net)!**: expose server/router scoped names (`HttpServer::Request`, `HttpServer::Connection`, `HttpRouter::Context`, `HttpRouter::Response`) and remove the `HttpRequest`/`HttpResponse` public header collision between client, server, and router APIs.
+- **fix(http)**: make `HttpClient` single-flight start/cancel semantics explicit and atomic enough to avoid resetting an in-flight request before a busy check.
+- **tidy(websocket)**: remove `WebSocketClient`'s unused dependency on `HttpClientEventListener`/`http_client.h`; the client owns its HTTP upgrade handshake directly.
+- **examples(net)**: add advanced HTTP client/router examples, WebSocket server example, and JSON-RPC IPC example.
+
 ### 2026-06 — Review Defects & Documentation
 
 - **fix(http)**: reset per-request CORS state on keep-alive connections and avoid dangling `Origin` string_view

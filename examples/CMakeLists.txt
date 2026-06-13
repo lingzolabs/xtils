@@ -32,7 +32,11 @@ add_example(cron_scheduler_example cron_scheduler_example.cc)
 add_example(websocket_client websocket_client_example.cc)
 add_example(common common.cc)
 add_example(http_client http_client_example.cc)
+add_example(http_client_advanced http_client_advanced_example.cc)
 add_example(http_server http_server_example.cc)
+add_example(http_router_advanced http_router_advanced_example.cc)
+add_example(ipc_channel ipc_channel_example.cc)
+add_example(websocket_server websocket_server_example.cc)
 add_example(bt_example bt_example.cc)
 
 add_custom_command(TARGET bt_example POST_BUILD

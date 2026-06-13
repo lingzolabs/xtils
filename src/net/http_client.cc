@@ -1,5 +1,6 @@
 #include "xtils/net/http_client.h"
 
+#include <exception>
 #include <fstream>
 #include <sstream>
 
@@ -12,53 +13,55 @@
 
 namespace xtils {
 
-// HttpRequest implementation
-void HttpRequest::AddHeader(const std::string& name, const std::string& value) {
+// HttpClient::Request implementation
+void HttpClient::Request::AddHeader(const std::string& name,
+                                    const std::string& value) {
   headers.emplace_back(name, value);
 }
 
-void HttpRequest::SetContentType(const std::string& content_type) {
+void HttpClient::Request::SetContentType(const std::string& content_type) {
   AddHeader("Content-Type", content_type);
 }
 
-void HttpRequest::SetUserAgent(const std::string& user_agent) {
+void HttpClient::Request::SetUserAgent(const std::string& user_agent) {
   AddHeader("User-Agent", user_agent);
 }
 
-void HttpRequest::SetAuthorization(const std::string& auth) {
+void HttpClient::Request::SetAuthorization(const std::string& auth) {
   AddHeader("Authorization", auth);
 }
 
-void HttpRequest::SetBody(const std::string& data,
-                          const std::string& content_type) {
+void HttpClient::Request::SetBody(const std::string& data,
+                                  const std::string& content_type) {
   body = data;
   if (!content_type.empty()) {
     SetContentType(content_type);
   }
 }
 
-void HttpRequest::SetJsonBody(const std::string& json) {
+void HttpClient::Request::SetJsonBody(const std::string& json) {
   SetBody(json, "application/json");
 }
 
-void HttpRequest::SetFormBody(
+void HttpClient::Request::SetFormBody(
     const std::map<std::string, std::string>& form_data) {
   SetBody(HttpUtils::FormDataEncode(form_data),
           "application/x-www-form-urlencoded");
 }
 
-void HttpRequest::SetMultipartBody(const std::vector<MultipartField>& fields,
-                                   const std::vector<MultipartFile>& files) {
+void HttpClient::Request::SetMultipartBody(
+    const std::vector<HttpClient::MultipartField>& fields,
+    const std::vector<HttpClient::MultipartFile>& files) {
   multipart_fields = fields;
   multipart_files = files;
 }
 
-// HttpResponse implementation
-std::string HttpResponse::GetHeader(const std::string& name) const {
+// HttpClient::Response implementation
+std::string HttpClient::Response::GetHeader(const std::string& name) const {
   return HttpUtils::GetHeaderValue(headers, name);
 }
 
-bool HttpResponse::HasHeader(const std::string& name) const {
+bool HttpClient::Response::HasHeader(const std::string& name) const {
   return HttpUtils::HasHeader(headers, name);
 }
 
@@ -74,7 +77,6 @@ HttpClient::HttpClient(TaskRunner* task_runner)
       max_receive_buffer_size_(100 * 1024 * 1024),
       verify_ssl_(true),
       ssl_cert_path_(),
-      connection_reusable_(false),
       lifetime_(std::make_shared<LifetimeToken>()) {
   SetUserAgent("xtils/1.0");
 }
@@ -91,25 +93,28 @@ HttpClient::~HttpClient() {
   Cancel();
 }
 
-HttpResponse HttpClient::Request(const HttpRequest& request) {
-  current_.Reset();
-  current_.completed.store(false);
-  if (!RequestAsync(request, nullptr)) {
-    HttpResponse error_response;
+HttpClient::Response HttpClient::Send(const HttpClient::Request& request) {
+  if (!SendAsync(request, nullptr)) {
+    HttpClient::Response error_response;
     error_response.status_code = 0;
-    error_response.status_message = current_.response.status_message.empty()
-                                        ? "Failed to start request"
-                                        : current_.response.status_message;
+    error_response.status_message = current_.completed.load()
+                                        ? current_.response.status_message
+                                        : "Client is busy";
+    if (error_response.status_message.empty()) {
+      error_response.status_message = "Failed to start request";
+    }
     return error_response;
   }
 
   std::unique_lock<std::mutex> lock(sync_mutex_);
   auto timeout = std::chrono::milliseconds(
       request.timeout_ms > 0 ? request.timeout_ms : default_timeout_ms_);
-  if (!sync_cv_.wait_for(lock, timeout,
-                         [this]() { return current_.completed.load(); })) {
+  bool completed = sync_cv_.wait_for(
+      lock, timeout, [this]() { return current_.completed.load(); });
+  lock.unlock();
+  if (!completed) {
     Cancel();
-    HttpResponse timeout_response;
+    HttpClient::Response timeout_response;
     timeout_response.status_code = 0;
     timeout_response.status_message = "Request timeout";
     return timeout_response;
@@ -118,122 +123,240 @@ HttpResponse HttpClient::Request(const HttpRequest& request) {
   return current_.response;
 }
 
-bool HttpClient::RequestAsync(const HttpRequest& request,
-                              HttpClientEventListener* listener) {
-  if (IsBusy()) {
+bool HttpClient::SendAsync(const HttpClient::Request& request,
+                           HttpClient::Listener* listener) {
+  std::string start_error;
+  {
+    std::lock_guard<std::mutex> lock(request_mutex_);
+    State expected = State::kIdle;
+    if (!state_.compare_exchange_strong(expected, State::kConnecting)) {
+      return false;
+    }
+
+    listener_ = listener;
+    current_.Reset();
+    active_request_generation_.store(request_generation_.fetch_add(1) + 1);
+    current_.request = request;
+    current_.timeout_ms =
+        request.timeout_ms > 0 ? request.timeout_ms : default_timeout_ms_;
+
+    if (!request.url.IsValid()) {
+      start_error = "Invalid URL";
+    } else if (request.is_multipart()) {
+      try {
+        std::string boundary =
+            request.boundary.empty() ? GenerateBoundary() : request.boundary;
+        current_.request.boundary = boundary;
+        current_.total_bytes = CalculateMultipartSize(
+            request.multipart_fields, request.multipart_files, boundary);
+      } catch (const std::exception& e) {
+        start_error = e.what();
+      }
+    }
+
+    if (start_error.empty() && !ConnectToHost(request.url)) {
+      start_error = "Failed to initiate connection";
+    }
+  }
+
+  if (!start_error.empty()) {
+    HttpClient::Listener* listener = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(request_mutex_);
+      if (!current_.completed.load()) {
+        state_.store(State::kError);
+        current_.response.status_code = 0;
+        current_.response.status_message = start_error;
+        last_response_ = current_.response;
+        listener = listener_;
+        current_.completed.store(true);
+        state_.store(State::kIdle);
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(sync_mutex_);
+      sync_cv_.notify_all();
+    }
+    if (listener) {
+      listener->OnHttpError(this, start_error);
+    }
     return false;
   }
-
-  listener_ = listener;
-  current_.Reset();
-  active_request_generation_.store(request_generation_.fetch_add(1) + 1);
-  current_.request = request;
-  current_.timeout_ms =
-      request.timeout_ms > 0 ? request.timeout_ms : default_timeout_ms_;
-
-  if (!request.url.IsValid()) {
-    HandleError("Invalid URL");
-    return false;
-  }
-
-  // Check if this is a multipart request
-  if (request.is_multipart()) {
-    std::string boundary =
-        request.boundary.empty() ? GenerateBoundary() : request.boundary;
-    current_.request.boundary = boundary;
-    current_.total_bytes = CalculateMultipartSize(
-        request.multipart_fields, request.multipart_files, boundary);
-  }
-
-  state_.store(State::kConnecting);
-  return ConnectToHost(request.url);
+  return true;
 }
 
-HttpResponse HttpClient::Get(const std::string& url) {
-  HttpRequest request;
+HttpClient::Response HttpClient::Get(const std::string& url) {
+  HttpClient::Request request;
   request.method = HttpMethod::kGet;
   request.url = HttpUrl(url);
-  return Request(request);
+  return Send(request);
 }
 
-HttpResponse HttpClient::Post(const std::string& url, const std::string& body,
-                              const std::string& content_type) {
-  HttpRequest request;
+HttpClient::Response HttpClient::Post(const std::string& url,
+                                      const std::string& body,
+                                      const std::string& content_type) {
+  HttpClient::Request request;
   request.method = HttpMethod::kPost;
   request.url = HttpUrl(url);
   request.SetBody(body, content_type);
-  return Request(request);
+  return Send(request);
 }
 
-HttpResponse HttpClient::PostJson(const std::string& url,
-                                  const std::string& json) {
+HttpClient::Response HttpClient::PostJson(const std::string& url,
+                                          const std::string& json) {
   return Post(url, json, "application/json");
 }
 
-HttpResponse HttpClient::PostForm(
+HttpClient::Response HttpClient::PostForm(
     const std::string& url,
     const std::map<std::string, std::string>& form_data) {
-  HttpRequest request;
+  HttpClient::Request request;
   request.method = HttpMethod::kPost;
   request.url = HttpUrl(url);
   request.SetFormBody(form_data);
-  return Request(request);
+  return Send(request);
 }
 
-HttpResponse HttpClient::PostMultipart(
-    const std::string& url, const std::vector<MultipartField>& fields,
-    const std::vector<MultipartFile>& files) {
-  HttpRequest request;
+HttpClient::Response HttpClient::PostMultipart(
+    const std::string& url,
+    const std::vector<HttpClient::MultipartField>& fields,
+    const std::vector<HttpClient::MultipartFile>& files) {
+  HttpClient::Request request;
   request.method = HttpMethod::kPost;
   request.url = HttpUrl(url);
   request.multipart_fields = fields;
   request.multipart_files = files;
   request.boundary = GenerateBoundary();
-  return Request(request);
+  return Send(request);
 }
 
 bool HttpClient::GetAsync(const std::string& url,
-                          HttpClientEventListener* listener) {
-  HttpRequest request;
+                          HttpClient::Listener* listener) {
+  HttpClient::Request request;
   request.method = HttpMethod::kGet;
   request.url = HttpUrl(url);
-  return RequestAsync(request, listener);
+  return SendAsync(request, listener);
 }
 
 bool HttpClient::PostAsync(const std::string& url, const std::string& body,
                            const std::string& content_type,
-                           HttpClientEventListener* listener) {
-  HttpRequest request;
+                           HttpClient::Listener* listener) {
+  HttpClient::Request request;
   request.method = HttpMethod::kPost;
   request.url = HttpUrl(url);
   request.SetBody(body, content_type);
-  return RequestAsync(request, listener);
+  return SendAsync(request, listener);
 }
 
 bool HttpClient::PostJsonAsync(const std::string& url, const std::string& json,
-                               HttpClientEventListener* listener) {
+                               HttpClient::Listener* listener) {
   return PostAsync(url, json, "application/json", listener);
 }
 
-bool HttpClient::PostMultipartAsync(const std::string& url,
-                                    const std::vector<MultipartField>& fields,
-                                    const std::vector<MultipartFile>& files,
-                                    HttpClientEventListener* listener) {
-  HttpRequest request;
+bool HttpClient::PostMultipartAsync(
+    const std::string& url,
+    const std::vector<HttpClient::MultipartField>& fields,
+    const std::vector<HttpClient::MultipartFile>& files,
+    HttpClient::Listener* listener) {
+  HttpClient::Request request;
   request.method = HttpMethod::kPost;
   request.url = HttpUrl(url);
   request.multipart_fields = fields;
   request.multipart_files = files;
   request.boundary = GenerateBoundary();
-  return RequestAsync(request, listener);
+  return SendAsync(request, listener);
 }
 
 void HttpClient::Cancel() {
-  if (transport_) {
-    transport_->Close();
+  if (task_runner_ && !task_runner_->RunsTasksOnCurrentThread()) {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool done = false;
+    task_runner_->PostTask([this, &mutex, &cv, &done]() {
+      CancelOnRunner();
+      std::lock_guard<std::mutex> lock(mutex);
+      done = true;
+      cv.notify_one();
+    });
+    std::unique_lock<std::mutex> lock(mutex);
+    cv.wait(lock, [&done]() { return done; });
+    return;
   }
-  state_.store(State::kIdle);
-  current_.Reset();
+
+  CancelOnRunner();
+}
+
+void HttpClient::CancelOnRunner() {
+  {
+    std::lock_guard<std::mutex> lock(request_mutex_);
+    if (current_.completed.load() || state_.load() == State::kIdle) {
+      return;
+    }
+
+    active_request_generation_.fetch_add(1);
+    current_.response.status_code = 0;
+    current_.response.status_message = "Request cancelled";
+    last_response_ = current_.response;
+    current_.completed.store(true);
+    current_.cancel_requested = true;
+    listener_ = nullptr;
+
+    if (current_.in_user_callback) {
+      // Defer Close()/reset until the current transport callback has unwound.
+    } else {
+      state_.store(State::kIdle);
+      if (transport_) {
+        transport_->Close();
+        transport_.reset();
+      }
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(sync_mutex_);
+  sync_cv_.notify_all();
+}
+
+bool HttpClient::FinishDeferredCancelOnRunner() {
+  if (!current_.cancel_requested) {
+    return false;
+  }
+  if (current_.deferred_cancel_scheduled) {
+    return true;
+  }
+
+  current_.deferred_cancel_scheduled = true;
+  auto lifetime = lifetime_;
+  const uint64_t generation = active_request_generation_.load();
+  task_runner_->PostTask([this, lifetime, generation]() {
+    {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (!lifetime->alive) return;
+      ++lifetime->active_callbacks;
+      lifetime->callback_thread = std::this_thread::get_id();
+    }
+    Scoped callback_guard([lifetime]() {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (lifetime->active_callbacks > 0) --lifetime->active_callbacks;
+      if (lifetime->active_callbacks == 0) {
+        lifetime->callback_thread = std::thread::id();
+        lifetime->cv.notify_all();
+      }
+    });
+
+    std::lock_guard<std::mutex> lock(request_mutex_);
+    if (active_request_generation_.load() != generation ||
+        !current_.cancel_requested) {
+      return;
+    }
+    if (transport_) {
+      transport_->Close();
+      transport_.reset();
+    }
+    current_.cancel_requested = false;
+    current_.deferred_cancel_scheduled = false;
+    state_.store(State::kIdle);
+  });
+  return true;
 }
 
 void HttpClient::SetDefaultHeaders(const HttpHeaders& headers) {
@@ -295,6 +418,9 @@ void HttpClient::SetSSLCertificate(const std::string& cert_path) {
   ssl_cert_path_ = cert_path;
 }
 void HttpClient::OnConnected(bool success) {
+  if (current_.completed.load() || state_.load() != State::kConnecting) {
+    return;
+  }
   if (!success) {
     HandleError("Failed to connect to host");
     return;
@@ -338,13 +464,19 @@ void HttpClient::OnConnected(bool success) {
 }
 
 void HttpClient::OnDataReceived(const void* data, size_t len) {
+  if (current_.completed.load() || state_.load() == State::kIdle) {
+    return;
+  }
   state_.store(State::kReceivingResponse);
   ProcessReceivedData(data, len);
 }
 
 void HttpClient::OnDisconnected() {
+  if (current_.completed.load() || state_.load() == State::kIdle) {
+    return;
+  }
   if (current_.headers_received && !current_.chunked_encoding &&
-      !current_.has_content_length && !current_.completed.load()) {
+      !current_.has_content_length) {
     CompleteRequest();
   } else if (state_ == State::kReceivingResponse) {
     // Connection closed, complete the response if we have enough data
@@ -352,10 +484,15 @@ void HttpClient::OnDisconnected() {
   }
 }
 
-void HttpClient::OnError(const std::string& error) { HandleError(error); }
+void HttpClient::OnError(const std::string& error) {
+  if (current_.completed.load() || state_.load() == State::kIdle) {
+    return;
+  }
+  HandleError(error);
+}
 
 // HTTP protocol handling
-std::string HttpClient::BuildHttpRequest(const HttpRequest& request) {
+std::string HttpClient::BuildHttpRequest(const HttpClient::Request& request) {
   std::ostringstream oss;
 
   // Request line
@@ -413,7 +550,7 @@ std::string HttpClient::BuildHttpRequest(const HttpRequest& request) {
   return oss.str();
 }
 
-bool HttpClient::SendHttpRequest(const HttpRequest& request) {
+bool HttpClient::SendHttpRequest(const HttpClient::Request& request) {
   std::string request_text = BuildHttpRequest(request);
 
   if (!transport_->Send(request_text.data(), request_text.size())) {
@@ -428,7 +565,7 @@ bool HttpClient::SendHttpRequest(const HttpRequest& request) {
   return true;
 }
 
-bool HttpClient::SendMultipartBody(const HttpRequest& request) {
+bool HttpClient::SendMultipartBody(const HttpClient::Request& request) {
   const std::string& boundary = request.boundary;
 
   // Send multipart fields
@@ -480,13 +617,19 @@ bool HttpClient::SendMultipartBody(const HttpRequest& request) {
 
       // Report progress
       if (listener_) {
+        current_.in_user_callback = true;
         listener_->OnProgress(this, current_.bytes_sent, current_.total_bytes);
+        current_.in_user_callback = false;
+        if (FinishDeferredCancelOnRunner()) return false;
       }
     }
 
     // Report progress
     if (listener_) {
+      current_.in_user_callback = true;
       listener_->OnProgress(this, current_.bytes_sent, current_.total_bytes);
+      current_.in_user_callback = false;
+      if (FinishDeferredCancelOnRunner()) return false;
     }
 
     // Send trailing CRLF
@@ -505,7 +648,10 @@ bool HttpClient::SendMultipartBody(const HttpRequest& request) {
   current_.bytes_sent += final_boundary.size();
   // Report progress
   if (listener_) {
+    current_.in_user_callback = true;
     listener_->OnProgress(this, current_.bytes_sent, current_.total_bytes);
+    current_.in_user_callback = false;
+    if (FinishDeferredCancelOnRunner()) return false;
   }
 
   return true;
@@ -608,11 +754,20 @@ void HttpClient::ProcessChunkedBody() {
     auto view = std::string_view(current_.receive_buffer);
     current_.bytes_received += current_.chunk_size;
     if (listener_) {
+      current_.in_user_callback = true;
       listener_->OnProgress(this, current_.bytes_received, -1);
+      current_.in_user_callback = false;
+      if (FinishDeferredCancelOnRunner()) return;
     }
-    if (listener_ &&
-        !listener_->OnBodyData(this, view.data(), current_.chunk_size)) {
-    } else {
+    bool append_body = true;
+    if (listener_) {
+      current_.in_user_callback = true;
+      append_body =
+          listener_->OnBodyData(this, view.data(), current_.chunk_size);
+      current_.in_user_callback = false;
+      if (FinishDeferredCancelOnRunner()) return;
+    }
+    if (append_body) {
       current_.response.body.append(view.data(), current_.chunk_size);
     }
     // Remove the chunk data and trailing \r\n from the buffer
@@ -625,29 +780,39 @@ void HttpClient::ProcessFixedLengthBody() {  // Call body data callback if in
                                              // streaming mode
 
   if (listener_ && !current_.receive_buffer.empty()) {
+    current_.in_user_callback = true;
     listener_->OnProgress(this, current_.bytes_received, current_.total_bytes);
+    current_.in_user_callback = false;
+    if (FinishDeferredCancelOnRunner()) return;
   }
 
   // For non-streaming mode, accumulate data
+  const size_t body_chunk_size = current_.receive_buffer.size();
   if (!current_.receive_buffer.empty()) {
-    if (listener_ &&
-        !listener_->OnBodyData(this, current_.receive_buffer.data(),
-                               current_.receive_buffer.size())) {
-    } else {
+    bool append_body = true;
+    if (listener_) {
+      current_.in_user_callback = true;
+      append_body = listener_->OnBodyData(this, current_.receive_buffer.data(),
+                                          current_.receive_buffer.size());
+      current_.in_user_callback = false;
+      if (FinishDeferredCancelOnRunner()) return;
+    }
+    if (append_body) {
       current_.response.body.append(current_.receive_buffer);
     }
+    current_.body_bytes_received += body_chunk_size;
   }
   current_.receive_buffer.clear();  // for next data
 
   if (!current_.has_content_length) return;
 
-  // Check if response is complete
-  if (current_.response.body.size() >= current_.content_length) {
+  // Check if response is complete. Use bytes consumed from the wire, not
+  // Response::body size, because streaming listeners may opt out of body
+  // accumulation by returning false from OnBodyData().
+  if (current_.body_bytes_received >= current_.content_length) {
     CompleteRequest();
   }
 }
-
-bool HttpClient::ParseHttpResponse() { return current_.headers_received; }
 
 void HttpClient::HandleRedirect() {
   if (!follow_redirects_) {
@@ -667,7 +832,10 @@ void HttpClient::HandleRedirect() {
   }
 
   if (listener_) {
+    current_.in_user_callback = true;
     listener_->OnRedirect(this, location);
+    current_.in_user_callback = false;
+    if (FinishDeferredCancelOnRunner()) return;
   }
 
   current_.redirect_count++;
@@ -693,9 +861,10 @@ void HttpClient::HandleRedirect() {
   current_.has_content_length = false;
   current_.content_length = 0;
   current_.bytes_received = 0;
+  current_.body_bytes_received = 0;
   current_.chunked_encoding = false;
   current_.chunk_size = -1;
-  current_.response = HttpResponse();
+  current_.response = HttpClient::Response();
 
   // Disconnect and reconnect
   if (transport_) transport_->Close();
@@ -714,6 +883,10 @@ void HttpClient::CompleteRequest() {
     return;
   }
 
+  if (current_.completed.load()) {
+    return;
+  }
+
   // Process Set-Cookie headers
   for (const auto& header : current_.response.headers) {
     if (header.name == "Set-Cookie") {
@@ -721,50 +894,88 @@ void HttpClient::CompleteRequest() {
     }
   }
 
-  // Mark as completed
-  current_.completed.store(true);
   last_response_ = current_.response;
-  HttpResponse response = current_.response;
-  HttpClientEventListener* listener = listener_;
+  HttpClient::Response response = current_.response;
+  HttpClient::Listener* listener = listener_;
+  current_.completed.store(true);
 
-  // Notify sync waiters before external callbacks. This keeps the object from
-  // touching members after a listener decides to destroy the client.
+  // Reset state before waking sync waiters; Send() callers may destroy this
+  // object immediately after the notification.
+  state_.store(State::kIdle);
+
+  // Notify listener on the next runner turn so transport callbacks fully unwind
+  // before user code can start another request or destroy this client.
+  if (listener) {
+    auto lifetime = lifetime_;
+    task_runner_->PostTask([this, lifetime, listener, response]() {
+      {
+        std::lock_guard<std::mutex> lock(lifetime->mutex);
+        if (!lifetime->alive) return;
+        ++lifetime->active_callbacks;
+        lifetime->callback_thread = std::this_thread::get_id();
+      }
+      Scoped callback_guard([lifetime]() {
+        std::lock_guard<std::mutex> lock(lifetime->mutex);
+        if (lifetime->active_callbacks > 0) --lifetime->active_callbacks;
+        if (lifetime->active_callbacks == 0) {
+          lifetime->callback_thread = std::thread::id();
+          lifetime->cv.notify_all();
+        }
+      });
+      listener->OnHttpResponse(this, response);
+    });
+  }
+
+  // Notify sync waiters last; do not touch members after this point.
   {
     std::lock_guard<std::mutex> lock(sync_mutex_);
     sync_cv_.notify_all();
-  }
-
-  // Reset state
-  state_.store(State::kIdle);
-
-  // Notify listener last; listener code may delete this object.
-  if (listener) {
-    listener->OnHttpResponse(this, response);
   }
 }
 
 void HttpClient::HandleError(const std::string& error) {
+  if (current_.completed.load()) {
+    return;
+  }
+
   state_.store(State::kError);
   current_.response.status_code = 0;
   current_.response.status_message = error;
 
-  current_.completed.store(true);
   last_response_ = current_.response;
-  HttpClientEventListener* listener = listener_;
+  HttpClient::Listener* listener = listener_;
   std::string error_copy = error;
-
-  // Notify sync waiters before external callbacks. This keeps the object from
-  // touching members after a listener decides to destroy the client.
-  {
-    std::lock_guard<std::mutex> lock(sync_mutex_);
-    sync_cv_.notify_all();
-  }
+  current_.completed.store(true);
 
   state_.store(State::kIdle);
 
-  // Notify listener last; listener code may delete this object.
+  // Notify listener on the next runner turn so transport callbacks fully unwind
+  // before user code can start another request or destroy this client.
   if (listener) {
-    listener->OnHttpError(this, error_copy);
+    auto lifetime = lifetime_;
+    task_runner_->PostTask([this, lifetime, listener, error_copy]() {
+      {
+        std::lock_guard<std::mutex> lock(lifetime->mutex);
+        if (!lifetime->alive) return;
+        ++lifetime->active_callbacks;
+        lifetime->callback_thread = std::this_thread::get_id();
+      }
+      Scoped callback_guard([lifetime]() {
+        std::lock_guard<std::mutex> lock(lifetime->mutex);
+        if (lifetime->active_callbacks > 0) --lifetime->active_callbacks;
+        if (lifetime->active_callbacks == 0) {
+          lifetime->callback_thread = std::thread::id();
+          lifetime->cv.notify_all();
+        }
+      });
+      listener->OnHttpError(this, error_copy);
+    });
+  }
+
+  // Notify sync waiters last; do not touch members after this point.
+  {
+    std::lock_guard<std::mutex> lock(sync_mutex_);
+    sync_cv_.notify_all();
   }
 }
 
@@ -805,14 +1016,6 @@ HttpHeaders HttpClient::MergeHeaders(const HttpHeaders& request_headers) {
   }
 
   return merged;
-}
-
-std::string HttpClient::FormatHeaders(const HttpHeaders& headers) {
-  std::ostringstream oss;
-  for (const auto& header : headers) {
-    oss << header.name << ": " << header.value << "\r\n";
-  }
-  return oss.str();
 }
 
 void HttpClient::ParseResponseHeaders(const std::string& header_text) {
@@ -877,10 +1080,6 @@ void HttpClient::ProcessSetCookieHeader(const std::string& cookie_header,
   SetCookie(name, value, domain);
 }
 
-std::string HttpClient::BuildCookieHeader(const std::string& domain) {
-  return GetCookies(domain);
-}
-
 std::string HttpClient::GenerateBoundary() {
   static const char alphanum[] =
       "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -892,8 +1091,9 @@ std::string HttpClient::GenerateBoundary() {
 }
 
 size_t HttpClient::CalculateMultipartSize(
-    const std::vector<MultipartField>& fields,
-    const std::vector<MultipartFile>& files, const std::string& boundary) {
+    const std::vector<HttpClient::MultipartField>& fields,
+    const std::vector<HttpClient::MultipartFile>& files,
+    const std::string& boundary) {
   size_t total_size = 0;
 
   // Calculate fields size

@@ -1,13 +1,18 @@
 #include "xtils/net/http_client.h"
 
+#include <atomic>
+#include <chrono>
 #include <string>
+#include <thread>
 
+#include "xtils/net/http_server.h"
 #include "xtils/tasks/thread_task_runner.h"
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
 using namespace xtils;
+using namespace std::chrono_literals;
 
 // ============================================================================
 // HttpUrl tests
@@ -97,11 +102,11 @@ TEST_CASE("HttpUrl: ToString") {
 }
 
 // ============================================================================
-// HttpRequest struct tests
+// HttpClient::Request struct tests
 // ============================================================================
 
-TEST_CASE("HttpRequest: set headers") {
-  xtils::HttpRequest req;
+TEST_CASE("HttpClient::Request: set headers") {
+  xtils::HttpClient::Request req;
   req.AddHeader("X-Custom", "value1");
   req.SetContentType("application/json");
   req.SetUserAgent("test-agent/1.0");
@@ -125,8 +130,8 @@ TEST_CASE("HttpRequest: set headers") {
   CHECK(found_auth);
 }
 
-TEST_CASE("HttpRequest: set JSON body") {
-  xtils::HttpRequest req;
+TEST_CASE("HttpClient::Request: set JSON body") {
+  xtils::HttpClient::Request req;
   req.SetJsonBody(R"({"key":"value"})");
 
   CHECK(req.body == R"({"key":"value"})");
@@ -138,8 +143,8 @@ TEST_CASE("HttpRequest: set JSON body") {
   CHECK(found_ct);
 }
 
-TEST_CASE("HttpRequest: set form body") {
-  xtils::HttpRequest req;
+TEST_CASE("HttpClient::Request: set form body") {
+  xtils::HttpClient::Request req;
   req.SetFormBody({{"name", "alice"}, {"age", "30"}});
 
   CHECK_FALSE(req.body.empty());
@@ -148,10 +153,10 @@ TEST_CASE("HttpRequest: set form body") {
   CHECK(req.body.find("age=30") != std::string::npos);
 }
 
-TEST_CASE("HttpRequest: multipart body") {
-  xtils::HttpRequest req;
-  std::vector<MultipartField> fields = {{"field1", "value1"}};
-  std::vector<MultipartFile> files;  // No files for this test
+TEST_CASE("HttpClient::Request: multipart body") {
+  xtils::HttpClient::Request req;
+  std::vector<HttpClient::MultipartField> fields = {{"field1", "value1"}};
+  std::vector<HttpClient::MultipartFile> files;  // No files for this test
 
   req.SetMultipartBody(fields, files);
   CHECK(req.is_multipart());
@@ -164,19 +169,77 @@ TEST_CASE("HttpClient: sync invalid URL returns without deadlock") {
   auto task_runner = ThreadTaskRunner::CreateAndStart("http_client_invalid");
   HttpClient client(&task_runner);
 
-  xtils::HttpRequest req;
-  auto resp = client.Request(req);
+  xtils::HttpClient::Request req;
+  auto resp = client.Send(req);
 
   CHECK(resp.status_code == 0);
   CHECK(resp.status_message == "Invalid URL");
 }
 
+TEST_CASE("HttpClient: busy Send does not reset in-flight async request") {
+  class SlowHandler : public HttpRequestHandler {
+   public:
+    void OnHttpRequest(const HttpServer::Request& req) override {
+      std::this_thread::sleep_for(100ms);
+      req.conn->SendResponse("200 OK", {{"Content-Type", "text/plain"}},
+                             "done");
+    }
+  };
+
+  class Listener : public HttpClient::Listener {
+   public:
+    void OnHttpResponse(HttpClient*,
+                        const HttpClient::Response& response) override {
+      status = response.status_code;
+      body = response.body;
+      done = true;
+    }
+    void OnHttpError(HttpClient*, const std::string& error) override {
+      status = 0;
+      body = error;
+      done = true;
+    }
+
+    std::atomic<bool> done{false};
+    int status = -1;
+    std::string body;
+  };
+
+  auto server_runner = ThreadTaskRunner::CreateAndStart("http_client_busy_srv");
+  SlowHandler handler;
+  HttpServer server(&server_runner, &handler);
+  REQUIRE(server.Start("127.0.0.1", 19090));
+
+  auto client_runner = ThreadTaskRunner::CreateAndStart("http_client_busy_cli");
+  HttpClient client(&client_runner);
+  Listener listener;
+
+  REQUIRE(client.GetAsync("http://127.0.0.1:19090/slow", &listener));
+
+  HttpClient::Request second;
+  second.url = HttpUrl("http://127.0.0.1:19090/second");
+  auto busy = client.Send(second);
+  CHECK(busy.status_code == 0);
+  CHECK(busy.status_message == "Client is busy");
+
+  for (int i = 0; i < 50 && !listener.done.load(); ++i) {
+    std::this_thread::sleep_for(20ms);
+  }
+
+  CHECK(listener.done.load());
+  CHECK(listener.status == 200);
+  CHECK(listener.body == "done");
+
+  server_runner.PostTask([&server]() { server.Stop(); });
+  std::this_thread::sleep_for(50ms);
+}
+
 // ============================================================================
-// HttpResponse struct tests
+// HttpClient::Response struct tests
 // ============================================================================
 
-TEST_CASE("HttpResponse: status helpers") {
-  xtils::HttpResponse resp;
+TEST_CASE("HttpClient::Response: status helpers") {
+  xtils::HttpClient::Response resp;
 
   resp.status_code = 200;
   CHECK(resp.IsSuccessful());
@@ -197,8 +260,8 @@ TEST_CASE("HttpResponse: status helpers") {
   CHECK(resp.IsError());
 }
 
-TEST_CASE("HttpResponse: header access") {
-  xtils::HttpResponse resp;
+TEST_CASE("HttpClient::Response: header access") {
+  xtils::HttpClient::Response resp;
   resp.headers.push_back({"Content-Type", "application/json"});
   resp.headers.push_back({"X-Request-Id", "abc123"});
 

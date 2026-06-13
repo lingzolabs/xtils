@@ -12,9 +12,9 @@ xtils/
 │   ├── logging/            # Logging (logger.h, sink.h, watchdog.h)
 │   ├── net/                # Networking
 │   │   ├── transport/      # Transport layer (transport.h, tls_transport.h, mbedtls_transport.h, tls_factory.h, plain_tcp_transport.h)
-│   │   ├── http_client.h   # HTTP client (sync & async)
-│   │   ├── http_server.h   # HTTP server (low-level, connection-oriented)
-│   │   ├── http_router.h   # HTTP router (Express-style routing, middleware, static files)
+│   │   ├── http_client.h   # HTTP client (sync & async; HttpClient::Request/Response)
+│   │   ├── http_server.h   # HTTP server (low-level; HttpServer::Request/Connection)
+│   │   ├── http_router.h   # HTTP router (Express-style; HttpRouter::Response)
 │   │   ├── http_multipart.h # Multipart form-data parser
 │   │   ├── http_common.h   # HTTP types (method, url, headers, status codes)
 │   │   ├── tcp_client.h / tcp_server.h
@@ -77,7 +77,7 @@ config (config.h — depends on json)
   ↑
 logging (logger, sink, watchdog)
   ↑
-net (tcp, udp, http, websocket — depends on tasks, system, utils)
+net (tcp, udp, http, websocket, ipc — depends on tasks, system, utils)
   ↑
 fsm (fsm, behavior_tree — depends on json, type_traits)
   ↑
@@ -87,6 +87,18 @@ scripting (opt-in, depends on utils/json; links QuickJS-NG)
   ↑
 app (app, service — orchestrates all modules)
 ```
+
+## Networking API Ownership
+
+HTTP public types are intentionally scoped to their owning API to prevent header
+collisions and make examples unambiguous:
+
+- `HttpClient::Request`, `HttpClient::Response`, `HttpClient::Listener`
+- `HttpServer::Request`, `HttpServer::Connection`, `HttpServer::Handler`
+- `HttpRouter::Context`, `HttpRouter::Response`
+
+`HttpClient` is single-flight: one client instance owns one in-progress request.
+Use multiple `HttpClient` instances for parallel requests.
 
 ## Build System
 
@@ -115,6 +127,16 @@ cd build && ctest --output-on-failure
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
+
+### Networking Examples
+
+When `BUILD_EXAMPLES=ON`, the networking examples cover the main public surface:
+
+- `tcp_example`, `udp_example`, `udp_multicast_example`
+- `http_client`, `http_client_advanced`
+- `http_server`, `http_router_advanced`
+- `websocket_client`, `websocket_server`
+- `ipc_channel`
 
 ### Linking
 

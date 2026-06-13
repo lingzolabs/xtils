@@ -42,7 +42,7 @@ int main() {
 
   auto router = std::make_unique<HttpRouter>();
   router->Get("/hello", [](const HttpRequestContext& ctx,
-                            HttpResponse& resp) {
+                            HttpRouter::Response& resp) {
     resp.Json(R"({"message": "Hello, World!"})");
   });
 

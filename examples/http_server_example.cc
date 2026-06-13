@@ -28,48 +28,47 @@ int main() {
 
   // --- Basic GET route (JSON response) ---
   router->Get("/api/hello",
-              [](const HttpRequestContext& ctx, HttpResponse& resp) {
+              [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
                 resp.Json(R"({"message":"Hello, World!"})");
               });
 
   // --- POST route (read request body) ---
   router->Post("/api/echo",
-               [](const HttpRequestContext& ctx, HttpResponse& resp) {
+               [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
                  std::string body = ctx.GetBody();
                  resp.Json(R"({"echo":")" + body + R"("})");
                });
 
   // --- Path parameter: /users/{id} ---
-  router->Get("/api/users/{id}",
-              [](const HttpRequestContext& ctx, HttpResponse& resp) {
-                std::string id = ctx.GetParam("id");
-                resp.Json(R"({"id":")" + id +
-                          R"(","name":"User )" + id + R"("})");
-              });
+  router->Get("/api/users/{id}", [](const HttpRequestContext& ctx,
+                                    HttpRouter::Response& resp) {
+    std::string id = ctx.GetParam("id");
+    resp.Json(R"({"id":")" + id + R"(","name":"User )" + id + R"("})");
+  });
 
   // --- Route group: /api/v1 ---
   auto v1 = router->Group("/api/v1");
 
   v1.Get("/status",
-         [](const HttpRequestContext& ctx, HttpResponse& resp) {
+         [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
            resp.Json(R"({"status":"ok","version":"1.0.0"})");
          });
 
   v1.Post("/items",
-          [](const HttpRequestContext& ctx, HttpResponse& resp) {
+          [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
             std::string body = ctx.GetBody();
             LogI("Create item: %s", body.c_str());
             resp.Status(201).Json(R"({"created":true})");
           });
 
   v1.Get("/items/{id}",
-         [](const HttpRequestContext& ctx, HttpResponse& resp) {
+         [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
            std::string id = ctx.GetParam("id");
            resp.Json(R"({"id":")" + id + R"(","name":"Item )" + id + R"("})");
          });
 
   v1.Delete("/items/{id}",
-            [](const HttpRequestContext& ctx, HttpResponse& resp) {
+            [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
               std::string id = ctx.GetParam("id");
               LogI("Delete item: %s", id.c_str());
               resp.Json(R"({"deleted":")" + id + R"("})");
@@ -79,8 +78,7 @@ int main() {
   router->Static("/static", "./public");
 
   // Create the request handler from the router.
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
 
   // Create and start the HTTP server.
   HttpServer server(&task_runner, handler.get());

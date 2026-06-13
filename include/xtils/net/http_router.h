@@ -74,12 +74,12 @@ class QueryParams {
 
 // Enhanced HTTP request context
 struct HttpRequestContext {
-  const HttpRequest* request;
+  const HttpServer::Request* request;
   RouteParams params;
   QueryParams query;
   std::map<std::string, std::string> headers_map;
 
-  explicit HttpRequestContext(const HttpRequest& req);
+  explicit HttpRequestContext(const HttpServer::Request& req);
 
   // Convenience methods
   std::string GetHeader(const std::string& name) const;
@@ -113,34 +113,34 @@ struct HttpRequestContext {
 };
 
 // HTTP response builder
-class HttpResponse {
+class HttpRouterResponse {
  public:
-  HttpResponse() = default;
+  HttpRouterResponse() = default;
 
   // Set status code
-  HttpResponse& Status(int code);
-  HttpResponse& Status(const std::string& status);
+  HttpRouterResponse& Status(int code);
+  HttpRouterResponse& Status(const std::string& status);
 
   // Set headers
-  HttpResponse& Header(const std::string& name, const std::string& value);
-  HttpResponse& Headers(const HttpHeaders& headers);
+  HttpRouterResponse& Header(const std::string& name, const std::string& value);
+  HttpRouterResponse& Headers(const HttpHeaders& headers);
 
   // Set content type
-  HttpResponse& ContentType(const std::string& content_type);
+  HttpRouterResponse& ContentType(const std::string& content_type);
 
   // Set body
-  HttpResponse& Body(const std::string& body);
-  HttpResponse& Json(const std::string& json);
-  HttpResponse& Html(const std::string& html);
-  HttpResponse& Text(const std::string& text);
+  HttpRouterResponse& Body(const std::string& body);
+  HttpRouterResponse& Json(const std::string& json);
+  HttpRouterResponse& Html(const std::string& html);
+  HttpRouterResponse& Text(const std::string& text);
 
   // File response
-  HttpResponse& File(const std::string& file_path);
-  HttpResponse& Download(const std::string& file_path,
-                         const std::string& filename = "");
+  HttpRouterResponse& File(const std::string& file_path);
+  HttpRouterResponse& Download(const std::string& file_path,
+                               const std::string& filename = "");
 
   // Redirect
-  HttpResponse& Redirect(const std::string& url, int code = 302);
+  HttpRouterResponse& Redirect(const std::string& url, int code = 302);
 
   // Build and send response
   void Send(HttpServerConnection* conn);
@@ -163,11 +163,11 @@ class HttpResponse {
 
 // Route handler function type
 using RouteHandler =
-    std::function<void(const HttpRequestContext&, HttpResponse&)>;
+    std::function<void(const HttpRequestContext&, HttpRouterResponse&)>;
 
 // Middleware function type
 using MiddlewareHandler =
-    std::function<bool(const HttpRequestContext&, HttpResponse&)>;
+    std::function<bool(const HttpRequestContext&, HttpRouterResponse&)>;
 
 // Route definition
 class Router {
@@ -179,7 +179,8 @@ class Router {
                RouteParams& params) const;
 
   // Execute the route handler
-  void Execute(const HttpRequestContext& context, HttpResponse& response) const;
+  void Execute(const HttpRequestContext& context,
+               HttpRouterResponse& response) const;
 
   // Get route info
   HttpMethod GetMethod() const { return method_; }
@@ -208,7 +209,7 @@ class StaticFileServer {
 
   // Serve static file
   void ServeFile(const HttpRequestContext& context,
-                 HttpResponse& response) const;
+                 HttpRouterResponse& response) const;
 
   // Set configuration
   void SetCacheControl(const std::string& cache_control) {
@@ -228,12 +229,15 @@ class StaticFileServer {
   std::string GetFilePath(const std::string& url_path) const;
   bool IsValidPath(const std::string& file_path) const;
   void ServeDirectoryListing(const std::string& directory_path,
-                             HttpResponse& response) const;
+                             HttpRouterResponse& response) const;
 };
 
 // HTTP Router
 class HttpRouter {
  public:
+  using Context = HttpRequestContext;
+  using Response = HttpRouterResponse;
+
   HttpRouter() = default;
   ~HttpRouter() = default;
 
@@ -288,15 +292,16 @@ class HttpRouter {
   }
 
   // Handle HTTP request
-  bool HandleRequest(const HttpRequest& request);
+  bool HandleRequest(const HttpServer::Request& request);
 
   // Set error handlers
   void SetNotFoundHandler(RouteHandler handler) {
     not_found_handler_ = handler;
   }
-  void SetErrorHandler(std::function<void(const HttpRequestContext&,
-                                          HttpResponse&, const std::string&)>
-                           handler) {
+  void SetErrorHandler(
+      std::function<void(const HttpRequestContext&, HttpRouterResponse&,
+                         const std::string&)>
+          handler) {
     error_handler_ = handler;
   }
 
@@ -310,7 +315,7 @@ class HttpRouter {
       middlewares_;  // path_prefix, handler
   std::vector<std::unique_ptr<StaticFileServer>> static_servers_;
   RouteHandler not_found_handler_;
-  std::function<void(const HttpRequestContext&, HttpResponse&,
+  std::function<void(const HttpRequestContext&, HttpRouterResponse&,
                      const std::string&)>
       error_handler_;
 
@@ -321,9 +326,9 @@ class HttpRouter {
   HttpMethod StringToMethod(const std::string& method) const;
   std::string MethodToString(HttpMethod method) const;
   void HandleCorsPreflightRequest(const HttpRequestContext& context,
-                                  HttpResponse& response);
+                                  HttpRouterResponse& response);
   bool RunMiddlewares(const HttpRequestContext& context,
-                      HttpResponse& response);
+                      HttpRouterResponse& response);
 };
 
 // Router-based HTTP request handler
@@ -332,7 +337,7 @@ class RouterHttpRequestHandler : public HttpRequestHandler {
   explicit RouterHttpRequestHandler(std::unique_ptr<HttpRouter> router)
       : router_(std::move(router)) {}
 
-  void OnHttpRequest(const HttpRequest& request) override {
+  void OnHttpRequest(const HttpServer::Request& request) override {
     if (!router_->HandleRequest(request)) {
       // Fallback to default behavior
       HttpHeaders headers;

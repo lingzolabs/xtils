@@ -222,18 +222,7 @@ void WebSocketClient::SetAutoReconnect(bool enable, uint32_t delay_ms) {
   reconnect_delay_ms_ = delay_ms > 0 ? delay_ms : reconnect_delay_ms_;
 }
 
-// HttpClientEventListener implementation (not used in this implementation)
-void WebSocketClient::OnHttpResponse(HttpClient* client,
-                                     const HttpResponse& response) {
-  // Not used - we handle handshake manually
-}
-
-void WebSocketClient::OnHttpError(HttpClient* client,
-                                  const std::string& error) {
-  // Not used - we handle handshake manually
-}
-
-// TcpClientEventListener implementation
+// TransportEventListener implementation
 void WebSocketClient::OnConnected(bool success) {
   if (!success) {
     HandleError("TCP connection failed");

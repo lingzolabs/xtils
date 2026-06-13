@@ -156,7 +156,7 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
   bool has_parsed_first_line = false;
   bool all_headers_received = false;
   bool has_origin = false;
-  HttpRequest http_req(conn);
+  HttpServerRequest http_req(conn);
   size_t body_size = 0;
   conn->origin_allowed_.clear();
   LogT("%s", std::string(buf_view).c_str());
@@ -265,7 +265,7 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
   return headers_size + body_size;
 }
 
-void HttpServer::HandleCorsPreflightRequest(const HttpRequest& req) {
+void HttpServer::HandleCorsPreflightRequest(const HttpServerRequest& req) {
   req.conn->SendResponseAndClose(
       "204 No Content",
       {
@@ -295,7 +295,7 @@ bool HttpServer::IsOriginAllowed(std::string_view origin) {
   return false;
 }
 
-void HttpServerConnection::UpgradeToWebsocket(const HttpRequest& req) {
+void HttpServerConnection::UpgradeToWebsocket(const HttpServerRequest& req) {
   XTILS_CHECK(req.is_websocket_handshake);
   // |origin_allowed_| is set to the req.origin only if it's in the allowlist.
   if (origin_allowed_.empty())
@@ -591,7 +591,8 @@ HttpServerConnection::HttpServerConnection(std::unique_ptr<UnixSocket> s,
 
 HttpServerConnection::~HttpServerConnection() = default;
 
-std::optional<std::string> HttpRequest::GetHeader(std::string_view name) const {
+std::optional<std::string> HttpServerRequest::GetHeader(
+    std::string_view name) const {
   for (size_t i = 0; i < num_headers; i++) {
     if (CaseInsensitiveEq(std::string_view(headers[i].name), name))
       return headers[i].value;

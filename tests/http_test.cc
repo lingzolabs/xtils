@@ -188,7 +188,7 @@ TEST_CASE("HTTP: GET route returns JSON") {
 
   auto router = std::make_unique<HttpRouter>();
   router->Get("/api/hello",
-              [](const HttpRequestContext& ctx, HttpResponse& resp) {
+              [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
                 resp.Json(R"({"message":"hello"})");
               });
 
@@ -217,7 +217,7 @@ TEST_CASE("HTTP: POST route echoes body") {
 
   auto router = std::make_unique<HttpRouter>();
   router->Post("/api/echo",
-               [](const HttpRequestContext& ctx, HttpResponse& resp) {
+               [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
                  std::string body = ctx.GetBody();
                  resp.Text(body);
                });
@@ -254,7 +254,7 @@ TEST_CASE("HTTP: route with path parameter") {
 
   auto router = std::make_unique<HttpRouter>();
   router->Get("/api/users/{id}",
-              [](const HttpRequestContext& ctx, HttpResponse& resp) {
+              [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
                 std::string id = ctx.GetParam("id");
                 resp.Json(R"({"id":")" + id + R"("})");
               });
@@ -284,7 +284,7 @@ TEST_CASE("HTTP: query parameters") {
 
   auto router = std::make_unique<HttpRouter>();
   router->Get("/api/search",
-              [](const HttpRequestContext& ctx, HttpResponse& resp) {
+              [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
                 std::string q = ctx.GetQuery("q");
                 resp.Json(R"({"query":")" + q + R"("})");
               });
@@ -312,8 +312,10 @@ TEST_CASE("HTTP: 404 for unknown route") {
   REQUIRE(port != 0);
 
   auto router = std::make_unique<HttpRouter>();
-  router->Get("/api/exists", [](const HttpRequestContext& ctx,
-                                HttpResponse& resp) { resp.Text("ok"); });
+  router->Get("/api/exists",
+              [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
+                resp.Text("ok");
+              });
 
   auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
@@ -337,8 +339,10 @@ TEST_CASE("HTTP: CORS preflight") {
   REQUIRE(port != 0);
 
   auto router = std::make_unique<HttpRouter>();
-  router->Get("/api/data", [](const HttpRequestContext& ctx,
-                              HttpResponse& resp) { resp.Text("data"); });
+  router->Get("/api/data",
+              [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
+                resp.Text("data");
+              });
 
   auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
@@ -376,7 +380,7 @@ TEST_CASE("HTTP: POST JSON content-type detection") {
 
   auto router = std::make_unique<HttpRouter>();
   router->Post("/api/json",
-               [](const HttpRequestContext& ctx, HttpResponse& resp) {
+               [](const HttpRequestContext& ctx, HttpRouter::Response& resp) {
                  if (ctx.IsJson()) {
                    resp.Json(R"({"received":true})");
                  } else {
@@ -418,13 +422,14 @@ TEST_CASE("HTTP: middleware") {
   auto router = std::make_unique<HttpRouter>();
 
   // Add middleware that adds a header
-  router->Use([](const HttpRequestContext& ctx, HttpResponse& resp) -> bool {
-    resp.Header("X-Middleware", "applied");
-    return true;  // Continue to route
-  });
+  router->Use(
+      [](const HttpRequestContext& ctx, HttpRouter::Response& resp) -> bool {
+        resp.Header("X-Middleware", "applied");
+        return true;  // Continue to route
+      });
 
   router->Get("/api/test", [](const HttpRequestContext& ctx,
-                              HttpResponse& resp) { resp.Text("ok"); });
+                              HttpRouter::Response& resp) { resp.Text("ok"); });
 
   auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
@@ -466,10 +471,10 @@ TEST_CASE("HTTP: streaming file response") {
   }
 
   auto router = std::make_unique<HttpRouter>();
-  router->Get("/download",
-              [&temp_path](const HttpRequestContext& ctx, HttpResponse& resp) {
-                resp.File(temp_path);
-              });
+  router->Get("/download", [&temp_path](const HttpRequestContext& ctx,
+                                        HttpRouter::Response& resp) {
+    resp.File(temp_path);
+  });
 
   auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());

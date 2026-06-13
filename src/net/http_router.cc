@@ -74,13 +74,14 @@ std::vector<std::string> QueryParams::GetAll(const std::string& name) const {
 
 // HttpRequestContext implementation
 
-HttpRequestContext::HttpRequestContext(const HttpRequest& req) : request(&req) {
+HttpRequestContext::HttpRequestContext(const HttpServer::Request& req)
+    : request(&req) {
   // Parse query string from URI
   std::string uri_str(req.uri.data(), req.uri.size());
   size_t query_pos = uri_str.find('?');
   if (query_pos != std::string::npos) {
     std::string_view query_view(uri_str.data() + query_pos + 1,
-                          uri_str.size() - query_pos - 1);
+                                uri_str.size() - query_pos - 1);
     query = QueryParams(query_view);
   }
 
@@ -127,14 +128,14 @@ std::string HttpRequestContext::GetClientIP() const {
   return "127.0.0.1";
 }
 
-const std::vector<MultipartFormField>&
-HttpRequestContext::GetMultipartFields() const {
+const std::vector<MultipartFormField>& HttpRequestContext::GetMultipartFields()
+    const {
   if (!multipart_parsed_) ParseMultipart();
   return multipart_fields_;
 }
 
-const std::vector<MultipartFormFile>&
-HttpRequestContext::GetMultipartFiles() const {
+const std::vector<MultipartFormFile>& HttpRequestContext::GetMultipartFiles()
+    const {
   if (!multipart_parsed_) ParseMultipart();
   return multipart_files_;
 }
@@ -156,9 +157,9 @@ void HttpRequestContext::ParseMultipart() const {
   }
 }
 
-// HttpResponse implementation
+// HttpRouterResponse implementation
 
-HttpResponse& HttpResponse::Status(int code) {
+HttpRouterResponse& HttpRouterResponse::Status(int code) {
   std::map<int, std::string> status_codes = {
       {200, "200 OK"},
       {201, "201 Created"},
@@ -181,52 +182,53 @@ HttpResponse& HttpResponse::Status(int code) {
   return *this;
 }
 
-HttpResponse& HttpResponse::Status(const std::string& status) {
+HttpRouterResponse& HttpRouterResponse::Status(const std::string& status) {
   status_ = status;
   return *this;
 }
 
-HttpResponse& HttpResponse::Header(const std::string& name,
-                                   const std::string& value) {
+HttpRouterResponse& HttpRouterResponse::Header(const std::string& name,
+                                               const std::string& value) {
   headers_.emplace_back(name, value);
   return *this;
 }
 
-HttpResponse& HttpResponse::Headers(const HttpHeaders& headers) {
+HttpRouterResponse& HttpRouterResponse::Headers(const HttpHeaders& headers) {
   headers_.insert(headers_.end(), headers.begin(), headers.end());
   return *this;
 }
 
-HttpResponse& HttpResponse::ContentType(const std::string& content_type) {
+HttpRouterResponse& HttpRouterResponse::ContentType(
+    const std::string& content_type) {
   return Header("Content-Type", content_type);
 }
 
-HttpResponse& HttpResponse::Body(const std::string& body) {
+HttpRouterResponse& HttpRouterResponse::Body(const std::string& body) {
   body_ = body;
   is_file_response_ = false;
   return *this;
 }
 
-HttpResponse& HttpResponse::Json(const std::string& json) {
+HttpRouterResponse& HttpRouterResponse::Json(const std::string& json) {
   return ContentType("application/json").Body(json);
 }
 
-HttpResponse& HttpResponse::Html(const std::string& html) {
+HttpRouterResponse& HttpRouterResponse::Html(const std::string& html) {
   return ContentType("text/html; charset=utf-8").Body(html);
 }
 
-HttpResponse& HttpResponse::Text(const std::string& text) {
+HttpRouterResponse& HttpRouterResponse::Text(const std::string& text) {
   return ContentType("text/plain; charset=utf-8").Body(text);
 }
 
-HttpResponse& HttpResponse::File(const std::string& file_path) {
+HttpRouterResponse& HttpRouterResponse::File(const std::string& file_path) {
   file_path_ = file_path;
   is_file_response_ = true;
   return *this;
 }
 
-HttpResponse& HttpResponse::Download(const std::string& file_path,
-                                     const std::string& filename) {
+HttpRouterResponse& HttpRouterResponse::Download(const std::string& file_path,
+                                                 const std::string& filename) {
   File(file_path);
   std::string download_filename =
       filename.empty() ? HttpUtils::GetBasename(file_path) : filename;
@@ -234,15 +236,16 @@ HttpResponse& HttpResponse::Download(const std::string& file_path,
                 "attachment; filename=\"" + download_filename + "\"");
 }
 
-HttpResponse& HttpResponse::Redirect(const std::string& url, int code) {
+HttpRouterResponse& HttpRouterResponse::Redirect(const std::string& url,
+                                                 int code) {
   Status(code);
   return Header("Location", url);
 }
 
-void HttpResponse::Send(HttpServerConnection* conn) {
+void HttpRouterResponse::Send(HttpServerConnection* conn) {
   if (is_file_response_) {
     if (!HttpUtils::FileExists(file_path_)) {
-      HttpResponse::SendError(conn, 404, "File Not Found");
+      HttpRouterResponse::SendError(conn, 404, "File Not Found");
       return;
     }
 
@@ -255,9 +258,8 @@ void HttpResponse::Send(HttpServerConnection* conn) {
       server_headers.emplace_back(h.name, h.value);
     }
 
-    if (!conn->SendFileStreaming(file_path_, status_.c_str(),
-                                 server_headers)) {
-      HttpResponse::SendError(conn, 500, "Failed to read file");
+    if (!conn->SendFileStreaming(file_path_, status_.c_str(), server_headers)) {
+      HttpRouterResponse::SendError(conn, 500, "Failed to read file");
     }
   } else {
     // Convert HttpHeaders to server Header format
@@ -269,8 +271,8 @@ void HttpResponse::Send(HttpServerConnection* conn) {
   }
 }
 
-void HttpResponse::SendJson(HttpServerConnection* conn, const std::string& json,
-                            int status) {
+void HttpRouterResponse::SendJson(HttpServerConnection* conn,
+                                  const std::string& json, int status) {
   HttpHeaders server_headers;
   server_headers.emplace_back("Content-Type", "application/json");
 
@@ -279,8 +281,8 @@ void HttpResponse::SendJson(HttpServerConnection* conn, const std::string& json,
   conn->SendResponse(status_str.c_str(), server_headers, json);
 }
 
-void HttpResponse::SendError(HttpServerConnection* conn, int status,
-                             const std::string& message) {
+void HttpRouterResponse::SendError(HttpServerConnection* conn, int status,
+                                   const std::string& message) {
   std::string error_message = message;
   if (error_message.empty()) {
     error_message = HttpUtils::GetStatusMessage(status);
@@ -296,10 +298,10 @@ void HttpResponse::SendError(HttpServerConnection* conn, int status,
   conn->SendResponse(status_str.c_str(), server_headers, html_body);
 }
 
-void HttpResponse::SendFile(HttpServerConnection* conn,
-                            const std::string& file_path) {
+void HttpRouterResponse::SendFile(HttpServerConnection* conn,
+                                  const std::string& file_path) {
   if (!HttpUtils::FileExists(file_path)) {
-    HttpResponse::SendError(conn, 404, "File Not Found");
+    HttpRouterResponse::SendError(conn, 404, "File Not Found");
     return;
   }
 
@@ -310,7 +312,7 @@ void HttpResponse::SendFile(HttpServerConnection* conn,
   server_headers.emplace_back("Content-Type", mime_type);
 
   if (!conn->SendFileStreaming(file_path, "200 OK", server_headers)) {
-    HttpResponse::SendError(conn, 500, "Failed to read file");
+    HttpRouterResponse::SendError(conn, 500, "Failed to read file");
   }
 }
 
@@ -403,7 +405,7 @@ bool Router::Matches(HttpMethod method, const std::string& path,
 }
 
 void Router::Execute(const HttpRequestContext& context,
-                     HttpResponse& response) const {
+                     HttpRouterResponse& response) const {
   if (handler_) {
     handler_(context, response);
   }
@@ -424,7 +426,7 @@ bool StaticFileServer::CanHandle(const std::string& path) const {
 }
 
 void StaticFileServer::ServeFile(const HttpRequestContext& context,
-                                 HttpResponse& response) const {
+                                 HttpRouterResponse& response) const {
   std::string file_path = GetFilePath(
       std::string(context.request->uri.data(), context.request->uri.size()));
 
@@ -475,8 +477,8 @@ bool StaticFileServer::IsValidPath(const std::string& file_path) const {
   }
 }
 
-void StaticFileServer::ServeDirectoryListing(const std::string& directory_path,
-                                             HttpResponse& response) const {
+void StaticFileServer::ServeDirectoryListing(
+    const std::string& directory_path, HttpRouterResponse& response) const {
   std::stringstream html;
   html << "<!DOCTYPE html><html><head><title>Directory Listing</title></head>";
   html << "<body><h1>Directory Listing</h1><ul>";
@@ -564,10 +566,10 @@ void HttpRouter::Static(const std::string& url_prefix,
       std::make_unique<StaticFileServer>(directory, url_prefix));
 }
 
-bool HttpRouter::HandleRequest(const HttpRequest& request) {
+bool HttpRouter::HandleRequest(const HttpServer::Request& request) {
   try {
     HttpRequestContext context(request);
-    HttpResponse response;
+    HttpRouterResponse response;
 
     // Handle CORS preflight
     if (cors_enabled_ && std::string(request.method.data(),
@@ -624,7 +626,7 @@ bool HttpRouter::HandleRequest(const HttpRequest& request) {
       not_found_handler_(context, response);
       response.Send(request.conn);
     } else {
-      HttpResponse::SendError(request.conn, 404, "Not Found");
+      HttpRouterResponse::SendError(request.conn, 404, "Not Found");
     }
 
     return true;
@@ -632,11 +634,11 @@ bool HttpRouter::HandleRequest(const HttpRequest& request) {
   } catch (const std::exception& e) {
     if (error_handler_) {
       HttpRequestContext context(request);
-      HttpResponse response;
+      HttpRouterResponse response;
       error_handler_(context, response, e.what());
       response.Send(request.conn);
     } else {
-      HttpResponse::SendError(request.conn, 500, "Internal Server Error");
+      HttpRouterResponse::SendError(request.conn, 500, "Internal Server Error");
     }
     return true;
   }
@@ -658,7 +660,7 @@ std::string HttpRouter::MethodToString(HttpMethod method) const {
 }
 
 void HttpRouter::HandleCorsPreflightRequest(const HttpRequestContext& context,
-                                            HttpResponse& response) {
+                                            HttpRouterResponse& response) {
   response.Status(204)
       .Header("Access-Control-Allow-Origin", cors_origin_)
       .Header("Access-Control-Allow-Methods", cors_methods_)
@@ -667,7 +669,7 @@ void HttpRouter::HandleCorsPreflightRequest(const HttpRequestContext& context,
 }
 
 bool HttpRouter::RunMiddlewares(const HttpRequestContext& context,
-                                HttpResponse& response) {
+                                HttpRouterResponse& response) {
   std::string path(context.request->uri.data(), context.request->uri.size());
 
   for (const auto& middleware : middlewares_) {

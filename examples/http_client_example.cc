@@ -1,6 +1,7 @@
 #include <xtils/logging/logger.h>
 #include <xtils/net/http_client.h>
 
+#include <atomic>
 #include <cstdio>
 #include <fstream>
 
@@ -12,7 +13,7 @@
 using namespace xtils;
 
 // Listener for downloading files
-class DownloadListener : public HttpClientEventListener {
+class DownloadListener : public HttpClient::Listener {
  public:
   explicit DownloadListener(const std::string& output_file = "")
       : total_received_(0) {
@@ -31,7 +32,7 @@ class DownloadListener : public HttpClientEventListener {
   }
 
   void OnHttpResponse(HttpClient* client,
-                      const HttpResponse& response) override {
+                      const HttpClient::Response& response) override {
     LogI("Response: %d %s", response.status_code,
          response.status_message.c_str());
     LogI("Total bytes received: %zu", total_received_);
@@ -39,10 +40,12 @@ class DownloadListener : public HttpClientEventListener {
       file_.close();
       LogI("File saved successfully");
     }
+    done_.store(true);
   }
 
   void OnHttpError(HttpClient* client, const std::string& error) override {
     LogE("Error: %s", error.c_str());
+    done_.store(true);
   }
 
   void OnProgress(HttpClient* client, size_t bytes_transferred,
@@ -67,9 +70,12 @@ class DownloadListener : public HttpClientEventListener {
     return false;  // no need to do next
   }
 
+  bool done() const { return done_.load(); }
+
  private:
   std::ofstream file_;
   size_t total_received_;
+  std::atomic<bool> done_{false};
 };
 
 void PrintUsage(const char* prog) {
@@ -139,8 +145,8 @@ int main(int argc, char** argv) {
 
     if (client.GetAsync(url, &listener)) {
       LogI("Downloading %s to %s...", url.c_str(), output_file.c_str());
-      // Wait for completion
-      while (client.IsBusy()) {
+      // Wait for the final listener callback, not just transport idle.
+      while (!listener.done()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
     } else {
@@ -154,8 +160,8 @@ int main(int argc, char** argv) {
 
     if (client.GetAsync(url, &listener)) {
       LogI("Async request started: %s", url.c_str());
-      // Wait for completion
-      while (client.IsBusy()) {
+      // Wait for the final listener callback, not just transport idle.
+      while (!listener.done()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
     } else {
@@ -178,11 +184,11 @@ int main(int argc, char** argv) {
     }
 
     // Prepare multipart data
-    std::vector<MultipartField> fields;
+    std::vector<HttpClient::MultipartField> fields;
     fields.push_back({"description", "Uploaded via xtils http client"});
 
-    std::vector<MultipartFile> files;
-    MultipartFile file;
+    std::vector<HttpClient::MultipartFile> files;
+    HttpClient::MultipartFile file;
     file.field_name = "file";
     file.filename = file_utils::bsname(file_path);
     file.file_path = file_path;

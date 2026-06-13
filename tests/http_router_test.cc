@@ -72,8 +72,9 @@ TEST_CASE("QueryParams: duplicate keys") {
 
 TEST_CASE("Router: exact path match") {
   bool called = false;
-  Router route(HttpMethod::kGet, "/api/hello",
-               [&](const HttpRequestContext&, HttpResponse&) { called = true; });
+  Router route(
+      HttpMethod::kGet, "/api/hello",
+      [&](const HttpRequestContext&, HttpRouter::Response&) { called = true; });
 
   RouteParams params;
   CHECK(route.Matches(HttpMethod::kGet, "/api/hello", params));
@@ -83,7 +84,7 @@ TEST_CASE("Router: exact path match") {
 
 TEST_CASE("Router: path parameter extraction") {
   Router route(HttpMethod::kGet, "/users/{id}",
-               [](const HttpRequestContext&, HttpResponse&) {});
+               [](const HttpRequestContext&, HttpRouter::Response&) {});
 
   RouteParams params;
   CHECK(route.Matches(HttpMethod::kGet, "/users/123", params));
@@ -92,7 +93,7 @@ TEST_CASE("Router: path parameter extraction") {
 
 TEST_CASE("Router: multiple path parameters") {
   Router route(HttpMethod::kGet, "/users/{user_id}/posts/{post_id}",
-               [](const HttpRequestContext&, HttpResponse&) {});
+               [](const HttpRequestContext&, HttpRouter::Response&) {});
 
   RouteParams params;
   CHECK(route.Matches(HttpMethod::kGet, "/users/5/posts/99", params));
@@ -102,7 +103,7 @@ TEST_CASE("Router: multiple path parameters") {
 
 TEST_CASE("Router: method mismatch") {
   Router route(HttpMethod::kPost, "/api/data",
-               [](const HttpRequestContext&, HttpResponse&) {});
+               [](const HttpRequestContext&, HttpRouter::Response&) {});
 
   RouteParams params;
   CHECK_FALSE(route.Matches(HttpMethod::kGet, "/api/data", params));
@@ -111,7 +112,7 @@ TEST_CASE("Router: method mismatch") {
 
 TEST_CASE("Router: Any method matches all") {
   Router route(HttpMethod::kAny, "/api/any",
-               [](const HttpRequestContext&, HttpResponse&) {});
+               [](const HttpRequestContext&, HttpRouter::Response&) {});
 
   RouteParams params;
   CHECK(route.Matches(HttpMethod::kGet, "/api/any", params));
@@ -129,15 +130,17 @@ TEST_CASE("HttpRouter: register and match routes") {
   bool get_called = false;
   bool post_called = false;
 
-  router.Get("/test", [&](const HttpRequestContext&, HttpResponse& resp) {
-    get_called = true;
-    resp.Text("ok");
-  });
+  router.Get("/test",
+             [&](const HttpRequestContext&, HttpRouter::Response& resp) {
+               get_called = true;
+               resp.Text("ok");
+             });
 
-  router.Post("/test", [&](const HttpRequestContext&, HttpResponse& resp) {
-    post_called = true;
-    resp.Text("created");
-  });
+  router.Post("/test",
+              [&](const HttpRequestContext&, HttpRouter::Response& resp) {
+                post_called = true;
+                resp.Text("created");
+              });
 
   // We can't easily test HandleRequest without a full server connection,
   // but we can verify routes were registered by checking pattern matching
@@ -150,7 +153,7 @@ TEST_CASE("HttpRouter: route group prefix") {
 
   auto api = router.Group("/api/v1");
   bool called = false;
-  api.Get("/users", [&](const HttpRequestContext&, HttpResponse&) {
+  api.Get("/users", [&](const HttpRequestContext&, HttpRouter::Response&) {
     called = true;
   });
 
@@ -163,14 +166,15 @@ TEST_CASE("HttpRouter: middleware registration") {
   HttpRouter router;
   bool mw_called = false;
 
-  router.Use([&](const HttpRequestContext&, HttpResponse&) -> bool {
+  router.Use([&](const HttpRequestContext&, HttpRouter::Response&) -> bool {
     mw_called = true;
     return true;  // continue
   });
 
-  router.Use("/api", [&](const HttpRequestContext&, HttpResponse&) -> bool {
-    return true;
-  });
+  router.Use("/api",
+             [&](const HttpRequestContext&, HttpRouter::Response&) -> bool {
+               return true;
+             });
 
   CHECK_FALSE(mw_called);  // Only called during request handling
 }

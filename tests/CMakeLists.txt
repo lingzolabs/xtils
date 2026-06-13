@@ -44,6 +44,9 @@ add_xtils_test(test_http_common http_common_test.cc)
 add_xtils_test(test_http_multipart http_multipart_test.cc)
 add_xtils_test(test_http_router http_router_test.cc)
 add_xtils_test(test_http_client http_client_test.cc)
+set_tests_properties(test_http_client
+    PROPERTIES RESOURCE_LOCK "network_port")
+add_xtils_test(test_net_include net_include_test.cc)
 
 if(SCRIPTING_ENABLE)
   add_xtils_test(test_scripting scripting_test.cc)

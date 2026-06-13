@@ -475,25 +475,34 @@ void SetClientTimeout(uint32_t timeout_ms);
 
 HttpClient(TaskRunner*);
 
-// Synchronous
-HttpResponse Get(url);
-HttpResponse Post(url, body, content_type="");
-HttpResponse PostJson(url, json);
-HttpResponse PostForm(url, map<string,string>);
-HttpResponse PostMultipart(url, fields, files);
-HttpResponse Request(const HttpRequest& request);
+// Scoped public types avoid collisions with server/router APIs.
+using Request = HttpClient::Request;
+using Response = HttpClient::Response;
+using Listener = HttpClient::Listener;
+using MultipartField = HttpClient::MultipartField;
+using MultipartFile = HttpClient::MultipartFile;
 
-// Asynchronous
+// Synchronous
+HttpClient::Response Send(const HttpClient::Request& request);
+HttpClient::Response Get(url);
+HttpClient::Response Post(url, body, content_type="");
+HttpClient::Response PostJson(url, json);
+HttpClient::Response PostForm(url, map<string,string>);
+HttpClient::Response PostMultipart(url, fields, files);
+
+// Asynchronous (single-flight: returns false if this client is busy).
+// Keep listener alive until OnHttpResponse/OnHttpError is called; IsBusy()
+// tracks transport/request state and is not a listener-lifetime barrier.
+bool SendAsync(request, listener);
 bool GetAsync(url, listener);
 bool PostAsync(url, body, content_type, listener);
 bool PostJsonAsync(url, json, listener);
 bool PostMultipartAsync(url, fields, files, listener);
-bool RequestAsync(request, listener);
 
 // Configuration
 void SetTimeout(uint32_t timeout_ms);
 void SetFollowRedirects(bool, max_redirects=5);
-void SetKeepAlive(bool);
+void SetKeepAlive(bool);  // sends the header; no connection pool/reuse yet
 void SetVerifySSL(bool);
 void SetSSLCertificate(cert_path);
 void SetCookie(name, value, domain="");
@@ -505,9 +514,9 @@ void SetCookie(name, value, domain="");
 #include "xtils/net/http_server.h"
 
 class HttpRequestHandler {
-  virtual void OnHttpRequest(const HttpRequest&) = 0;
+  virtual void OnHttpRequest(const HttpServer::Request&) = 0;
   virtual void OnWebsocketMessage(const WebsocketMessage&) {}
-  virtual void OnHttpConnectionClosed(HttpServerConnection*) {}
+  virtual void OnHttpConnectionClosed(HttpServer::Connection*) {}
 };
 
 HttpServer(TaskRunner*, HttpRequestHandler*);
@@ -529,6 +538,10 @@ bool conn->SendFileStreaming(file_path, http_code, headers);
 ```cpp
 #include "xtils/net/http_router.h"
 
+// Handler-friendly scoped aliases:
+//   HttpRouter::Context  == HttpRequestContext
+//   HttpRouter::Response == response builder
+
 HttpRouter router;
 router.Get("/api/users", handler);
 router.Post("/api/users", handler);
@@ -537,7 +550,7 @@ router.Delete("/api/users/:id", handler);
 router.Any("/api/*", handler);
 
 // Middleware
-router.Use([](const HttpRequestContext& ctx, HttpResponse& res) -> bool { ... });
+router.Use([](const HttpRequestContext& ctx, HttpRouter::Response& res) -> bool { ... });
 router.Use("/api", middleware);
 
 // Static files
@@ -551,7 +564,7 @@ api.Get("/users", handler);
 router.EnableCors("*", "GET,POST,PUT,DELETE,OPTIONS");
 
 // Handler signature
-void handler(const HttpRequestContext& ctx, HttpResponse& res) {
+void handler(const HttpRequestContext& ctx, HttpRouter::Response& res) {
   auto id = ctx.GetParam("id");     // URL parameter
   auto q = ctx.GetQuery("search");  // Query parameter
   auto body = ctx.GetBody();

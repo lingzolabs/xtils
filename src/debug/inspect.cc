@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "inspect_page.h"  // generated: kInspectPageHtml
 #include "xtils/logging/logger.h"
 #include "xtils/net/http_common.h"
 #include "xtils/net/http_server.h"
@@ -16,7 +17,6 @@
 #include "xtils/utils/exception.h"
 #include "xtils/utils/file_utils.h"
 #include "xtils/utils/json.h"
-#include "inspect_page.h"  // generated: kInspectPageHtml
 #include "xtils/utils/string_utils.h"
 
 namespace xtils {
@@ -29,20 +29,29 @@ namespace {
 
 std::string FormatDuration(uint64_t sec) {
   std::string s;
-  if (sec >= 86400) { s += std::to_string(sec / 86400) + "d "; sec %= 86400; }
-  if (sec >= 3600) { s += std::to_string(sec / 3600) + "h "; sec %= 3600; }
-  if (sec >= 60) { s += std::to_string(sec / 60) + "m "; sec %= 60; }
+  if (sec >= 86400) {
+    s += std::to_string(sec / 86400) + "d ";
+    sec %= 86400;
+  }
+  if (sec >= 3600) {
+    s += std::to_string(sec / 3600) + "h ";
+    sec %= 3600;
+  }
+  if (sec >= 60) {
+    s += std::to_string(sec / 60) + "m ";
+    sec %= 60;
+  }
   s += std::to_string(sec) + "s";
   return s;
 }
 
 struct SysSnapshot {
-  std::string uptime;       // process uptime
-  std::string rss;          // e.g. "12345 KB"
+  std::string uptime;  // process uptime
+  std::string rss;     // e.g. "12345 KB"
   std::string threads;
   std::string fds;
-  std::string load;         // e.g. "0.5/0.3/0.2"
-  std::string mem;          // e.g. "available/total KB"
+  std::string load;  // e.g. "0.5/0.3/0.2"
+  std::string mem;   // e.g. "available/total KB"
   std::string localtime;
 
   static SysSnapshot Collect() {
@@ -66,14 +75,15 @@ struct SysSnapshot {
       if (f.size() > 23) {
         double start = sys_uptime - std::stol(f[21]) / double(clk);
         s.uptime = FormatDuration(uint64_t(start));
-        s.rss = std::to_string(std::stol(f[23]) * sysconf(_SC_PAGESIZE) / 1024)
-                + " KB";
+        s.rss =
+            std::to_string(std::stol(f[23]) * sysconf(_SC_PAGESIZE) / 1024) +
+            " KB";
         s.threads = f[19];
       }
     });
     Try([&] {
-      s.fds = std::to_string(
-          file_utils::list_directory("/proc/self/fd").size());
+      s.fds =
+          std::to_string(file_utils::list_directory("/proc/self/fd").size());
     });
 
     // Load average
@@ -180,8 +190,8 @@ class Impl : public HttpRequestHandler {
   }
 
   // Publish
-  Inspect::PublishResult Publish(const std::string& url,
-                                 const std::string& msg, bool text) {
+  Inspect::PublishResult Publish(const std::string& url, const std::string& msg,
+                                 bool text) {
     std::lock_guard<std::recursive_mutex> lock(mu_);
     Inspect::PublishResult r;
     auto it = ws_conns_.find(url);
@@ -246,7 +256,7 @@ class Impl : public HttpRequestHandler {
   }
 
   // HttpRequestHandler
-  void OnHttpRequest(const HttpRequest& req) override {
+  void OnHttpRequest(const HttpServer::Request& req) override {
     if (req.is_websocket_handshake) {
       HandleWsUpgrade(req);
       return;
@@ -265,8 +275,9 @@ class Impl : public HttpRequestHandler {
       std::lock_guard<std::recursive_mutex> lock(mu_);
       auto it = routes_.find(path);
       if (it != routes_.end()) {
-        try { it->second.handler(ireq, resp); }
-        catch (const std::exception& e) {
+        try {
+          it->second.handler(ireq, resp);
+        } catch (const std::exception& e) {
           resp = Inspect::Error(std::string("Handler error: ") + e.what());
         }
       } else {
@@ -292,16 +303,16 @@ class Impl : public HttpRequestHandler {
     req.connection = msg.conn;
 
     Inspect::Response resp;
-    try { rit->second.handler(req, resp); }
-    catch (const std::exception& e) {
+    try {
+      rit->second.handler(req, resp);
+    } catch (const std::exception& e) {
       resp = Inspect::Error(std::string("WS error: ") + e.what());
     }
     if (!resp.content.empty()) {
-      resp.is_text
-          ? msg.conn->SendWebsocketMessageText(resp.content.data(),
-                                               resp.content.size())
-          : msg.conn->SendWebsocketMessage(resp.content.data(),
-                                           resp.content.size());
+      resp.is_text ? msg.conn->SendWebsocketMessageText(resp.content.data(),
+                                                        resp.content.size())
+                   : msg.conn->SendWebsocketMessage(resp.content.data(),
+                                                    resp.content.size());
     }
   }
 
@@ -330,13 +341,12 @@ class Impl : public HttpRequestHandler {
     std::string kv;
     while (std::getline(ss, kv, '&')) {
       auto eq = kv.find('=');
-      if (eq != std::string::npos)
-        m[kv.substr(0, eq)] = kv.substr(eq + 1);
+      if (eq != std::string::npos) m[kv.substr(0, eq)] = kv.substr(eq + 1);
     }
     return m;
   }
 
-  void HandleWsUpgrade(const HttpRequest& req) {
+  void HandleWsUpgrade(const HttpServer::Request& req) {
     std::lock_guard<std::recursive_mutex> lock(mu_);
     auto path = PathOf(std::string(req.uri));
     auto it = routes_.find(path);
@@ -364,13 +374,15 @@ class Impl : public HttpRequestHandler {
 
   // --- Index page ---
   void RegisterIndexRoute() {
-    routes_["/"] = {"Index", [this](const Inspect::Request& req,
-                                    Inspect::Response& resp) {
-      if (req.query.count("json"))
-        resp = Inspect::Json(GetServerInfo());
-      else
-        resp = Inspect::Html(BuildIndexHtml());
-    }, false};
+    routes_["/"] = {
+        "Index",
+        [this](const Inspect::Request& req, Inspect::Response& resp) {
+          if (req.query.count("json"))
+            resp = Inspect::Json(GetServerInfo());
+          else
+            resp = Inspect::Html(BuildIndexHtml());
+        },
+        false};
   }
 
   std::string BuildIndexHtml() const {
@@ -469,10 +481,12 @@ void Inspect::WebSocket(const std::string& path, const std::string& desc,
 void Inspect::Static(const std::string& path, const std::string& content,
                      const std::string& content_type) {
   XTILS_CHECK(g_impl);
-  g_impl->AddRoute(path, "Static",
-                   [content, content_type](const Request&, Response& r) {
-                     r = Response(content, content_type);
-                   }, false);
+  g_impl->AddRoute(
+      path, "Static",
+      [content, content_type](const Request&, Response& r) {
+        r = Response(content, content_type);
+      },
+      false);
 }
 
 void Inspect::Unregister(const std::string& path) {

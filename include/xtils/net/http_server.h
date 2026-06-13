@@ -24,10 +24,11 @@ struct HttpServerConfig {
 };
 
 class HttpServerConnection;
+class HttpRequestHandler;
 
 // Represents an HTTP request.
-struct HttpRequest {
-  explicit HttpRequest(HttpServerConnection* c) : conn(c) {}
+struct HttpServerRequest {
+  explicit HttpServerRequest(HttpServerConnection* c) : conn(c) {}
 
   // Gets the value of a header with the given name, if it exists.
   std::optional<std::string> GetHeader(std::string_view name) const;
@@ -100,8 +101,7 @@ class HttpServerConnection {
   // Stream a file to the client in chunks, avoiding loading the entire
   // file into memory. Sends Content-Length from file size, then reads
   // and sends in 64KB chunks. Returns false on file open error.
-  bool SendFileStreaming(const std::string& file_path,
-                         const char* http_code,
+  bool SendFileStreaming(const std::string& file_path, const char* http_code,
                          const HttpHeaders& headers = {});
 
   // The methods below are only valid for websocket connections.
@@ -111,7 +111,7 @@ class HttpServerConnection {
   // If the origin is not in the |allowed_origins_|, the request will fail with
   // a 403 error (this is because there is no browser-side CORS support for
   // websockets).
-  void UpgradeToWebsocket(const HttpRequest&);
+  void UpgradeToWebsocket(const HttpServerRequest&);
   void SendWebsocketMessageText(const void* data, size_t len);
   void SendWebsocketMessage(const void* data, size_t len);
   void SendWebsocketMessage(std::string_view sv) {
@@ -154,18 +154,13 @@ class HttpServerConnection {
   bool keepalive_ = true;
 };
 
-class HttpRequestHandler {
- public:
-  virtual ~HttpRequestHandler() = default;
-  virtual void OnHttpRequest(const HttpRequest&) = 0;
-  virtual void OnWebsocketMessage(const WebsocketMessage&) {};
-  virtual void OnHttpConnectionClosed(HttpServerConnection*) {};
-};
-
 class HttpServer : public UnixSocket::EventListener {
  public:
-  HttpServer(TaskRunner*, HttpRequestHandler*,
-             HttpServerConfig config = {});
+  using Request = HttpServerRequest;
+  using Connection = HttpServerConnection;
+  using Handler = HttpRequestHandler;
+
+  HttpServer(TaskRunner*, HttpRequestHandler*, HttpServerConfig config = {});
   ~HttpServer() override;
   bool Start(const std::string& ip, int port);
   void Stop();
@@ -174,7 +169,7 @@ class HttpServer : public UnixSocket::EventListener {
  private:
   size_t ParseOneHttpRequest(HttpServerConnection*);
   size_t ParseOneWebsocketFrame(HttpServerConnection*);
-  void HandleCorsPreflightRequest(const HttpRequest&);
+  void HandleCorsPreflightRequest(const HttpServerRequest&);
   bool IsOriginAllowed(std::string_view);
 
   // UnixSocket::EventListener implementation.
@@ -192,6 +187,14 @@ class HttpServer : public UnixSocket::EventListener {
   std::list<std::string> allowed_origins_;
   bool origin_error_logged_ = false;
   bool is_stopping_ = false;
+};
+
+class HttpRequestHandler {
+ public:
+  virtual ~HttpRequestHandler() = default;
+  virtual void OnHttpRequest(const HttpServer::Request&) = 0;
+  virtual void OnWebsocketMessage(const WebsocketMessage&){};
+  virtual void OnHttpConnectionClosed(HttpServer::Connection*){};
 };
 
 }  // namespace xtils
