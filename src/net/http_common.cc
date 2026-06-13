@@ -43,7 +43,14 @@ HttpUrl::HttpUrl(const std::string& url) {
 
   if (colon_pos != std::string::npos && colon_pos < host_port.length() - 1) {
     host = host_port.substr(0, colon_pos);
-    port = static_cast<uint16_t>(std::stoul(host_port.substr(colon_pos + 1)));
+    auto parsed_port = StringToUInt32(host_port.substr(colon_pos + 1));
+    if (!parsed_port || *parsed_port > 65535) {
+      scheme.clear();
+      host.clear();
+      port = 0;
+      return;
+    }
+    port = static_cast<uint16_t>(*parsed_port);
   } else {
     host = host_port;
     port = GetDefaultPort();
@@ -183,9 +190,13 @@ std::string UrlDecode(const std::string& str) {
   for (size_t i = 0; i < str.length(); ++i) {
     if (str[i] == '%' && i + 2 < str.length()) {
       std::string hex = str.substr(i + 1, 2);
-      char decoded = static_cast<char>(std::stoi(hex, nullptr, 16));
-      ss << decoded;
-      i += 2;
+      auto decoded = StringToUInt32(hex, 16);
+      if (decoded && *decoded <= 0xFF) {
+        ss << static_cast<char>(*decoded);
+        i += 2;
+      } else {
+        ss << str[i];
+      }
     } else if (str[i] == '+') {
       ss << ' ';
     } else {
@@ -262,9 +273,7 @@ std::string GetBasename(const std::string& path) {
   return file_utils::bsname(path);
 }
 
-bool FileExists(const std::string& path) {
-  return file_utils::exists(path);
-}
+bool FileExists(const std::string& path) { return file_utils::exists(path); }
 
 size_t GetFileSize(const std::string& path) {
   return file_utils::file_size(path);
@@ -329,7 +338,10 @@ std::string GetHeaderValue(const HttpHeaders& headers,
 }
 
 bool HasHeader(const HttpHeaders& headers, const std::string& name) {
-  return !GetHeaderValue(headers, name).empty();
+  for (const auto& header : headers) {
+    if (CaseInsensitiveEqual(header.name, name)) return true;
+  }
+  return false;
 }
 
 void AddHeader(HttpHeaders& headers, const std::string& name,

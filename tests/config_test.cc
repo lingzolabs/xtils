@@ -31,6 +31,8 @@ TEST_CASE("Basic Option Definition") {
   CHECK(config.GetInt("int_opt").value() == 42);
   CHECK(config.GetDouble("double_opt").value() == 3.14);
   CHECK(config.GetBool("bool_opt").value() == true);
+  CHECK_FALSE(config.GetString("required_opt").has_value());
+  config.Set("required_opt", "must_set");
   CHECK(config.GetString("required_opt").value() == "must_set");
 }
 
@@ -257,6 +259,12 @@ TEST_CASE("Validation") {
       .Define("optional_str", "Optional string", "default", false)
       .Define("required_int", "Required integer", 0, true);
 
+  CHECK_FALSE(config.Validate());
+  auto missing = config.MissingRequired();
+  CHECK(missing.size() == 2);
+
+  config.Set("required_str", "value");
+  config.Set("required_int", 7);
   CHECK(config.Validate());
   CHECK(config.MissingRequired().empty());
 
@@ -440,8 +448,7 @@ TEST_CASE("Complex Nested Structures") {
 
   REQUIRE(config.Parse(complex_json));
 
-  CHECK(config.GetString("database.primary.host").value() ==
-        "db1.example.com");
+  CHECK(config.GetString("database.primary.host").value() == "db1.example.com");
   CHECK(config.GetInt("database.primary.port").value() == 5432);
   CHECK(config.GetString("database.primary.credentials.username").value() ==
         "app_user");

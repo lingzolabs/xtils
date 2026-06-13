@@ -2,8 +2,12 @@
 
 include(CMakeFindDependencyMacro)
 
-# Find dependencies if any
-# find_dependency(SomePackage REQUIRED)
+set(XTILS_TLS_BACKEND "@TLS_BACKEND_LOWER@")
+if(XTILS_TLS_BACKEND STREQUAL "openssl")
+    find_dependency(OpenSSL REQUIRED)
+elseif(XTILS_TLS_BACKEND STREQUAL "mbedtls")
+    find_dependency(MbedTLS REQUIRED)
+endif()
 
 # Include the targets file
 include("${CMAKE_CURRENT_LIST_DIR}/xtils-targets.cmake")

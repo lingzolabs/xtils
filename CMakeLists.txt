@@ -160,5 +160,6 @@ install(FILES
     ${CMAKE_CURRENT_BINARY_DIR}/xtils-config.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/xtils-config-version.cmake
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/xtils-autogen.cmake
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/xtils
 )

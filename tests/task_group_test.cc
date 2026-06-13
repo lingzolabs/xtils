@@ -85,6 +85,22 @@ TEST_CASE_FIXTURE(TaskGroupTestFixture,
 }
 
 TEST_CASE_FIXTURE(TaskGroupTestFixture,
+                  "TaskGroup: StopWaitAll waits for queued work") {
+  auto tg = std::make_shared<TaskGroup>(1);
+  std::atomic<int> completed{0};
+
+  for (int i = 0; i < 3; ++i) {
+    tg->PostAsyncTask([&]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      completed++;
+    });
+  }
+
+  CHECK(tg->StopWaitAll(std::chrono::seconds(2)));
+  CHECK(completed == 3);
+}
+
+TEST_CASE_FIXTURE(TaskGroupTestFixture,
                   "TaskGroup: Sequential shares main_runner") {
   auto async_tg = std::make_shared<TaskGroup>(2);
   auto sync_tg = TaskGroup::Sequential(async_tg->MainRunner());

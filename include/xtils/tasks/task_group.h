@@ -68,18 +68,17 @@ class TaskGroup {
 
 #ifdef XTILS_ENABLE_DEPRECATED
   // Deprecated wrappers
-  [[deprecated("Use IsBusy() instead")]]
-  bool is_busy() { return IsBusy(); }
-  [[deprecated("Use Size() instead")]]
-  int size() { return Size(); }
-  [[deprecated("Use Stop() instead")]]
-  void stop() { Stop(); }
-  [[deprecated("Use StopWaitAll() instead")]]
-  bool stop_wait_all(std::chrono::seconds timeout = std::chrono::seconds(5)) {
+  [[deprecated("Use IsBusy() instead")]] bool is_busy() { return IsBusy(); }
+  [[deprecated("Use Size() instead")]] int size() { return Size(); }
+  [[deprecated("Use Stop() instead")]] void stop() { Stop(); }
+  [[deprecated("Use StopWaitAll() instead")]] bool stop_wait_all(
+      std::chrono::seconds timeout = std::chrono::seconds(5)) {
     return StopWaitAll(timeout);
   }
-  [[deprecated("Use MainRunner() instead")]]
-  std::shared_ptr<TaskRunner> main_runner() { return MainRunner(); }
+  [[deprecated("Use MainRunner() instead")]] std::shared_ptr<TaskRunner>
+  main_runner() {
+    return MainRunner();
+  }
 #endif  // XTILS_ENABLE_DEPRECATED
 
  private:
@@ -88,6 +87,7 @@ class TaskGroup {
 
  private:
   std::atomic_bool quit_{false};
+  std::atomic_int pending_tasks_{0};
   ThreadSafe<std::list<Task>> tasks_;
   std::list<std::thread> threads_;
   std::atomic_int exit_id_{-1};

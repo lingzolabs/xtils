@@ -1,7 +1,3 @@
-#include "xtils/net/http_router.h"
-#include "xtils/net/http_server.h"
-#include "xtils/tasks/thread_task_runner.h"
-
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -12,7 +8,10 @@
 #include <string>
 #include <thread>
 
+#include "xtils/net/http_router.h"
+#include "xtils/net/http_server.h"
 #include "xtils/net/tcp_client.h"
+#include "xtils/tasks/thread_task_runner.h"
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
@@ -58,10 +57,10 @@ class RawHttpClient : public TcpClientEventListener {
       if (cl_pos != std::string::npos) {
         size_t cl_val_start = cl_pos + 16;
         size_t cl_val_end = headers.find("\r\n", cl_val_start);
-        std::string cl_str = headers.substr(
-            cl_val_start,
-            cl_val_end == std::string::npos ? std::string::npos
-                                            : cl_val_end - cl_val_start);
+        std::string cl_str =
+            headers.substr(cl_val_start, cl_val_end == std::string::npos
+                                             ? std::string::npos
+                                             : cl_val_end - cl_val_start);
         size_t content_length = std::stoul(cl_str);
         if (recv_buf.size() >= body_start + content_length) {
           response_done = true;
@@ -98,9 +97,8 @@ class RawHttpClient : public TcpClientEventListener {
       if (space1 != std::string::npos) {
         auto space2 = resp.status_line.find(' ', space1 + 1);
         std::string code_str = resp.status_line.substr(
-            space1 + 1,
-            space2 == std::string::npos ? std::string::npos
-                                        : space2 - space1 - 1);
+            space1 + 1, space2 == std::string::npos ? std::string::npos
+                                                    : space2 - space1 - 1);
         try {
           resp.status_code = std::stoi(code_str);
         } catch (...) {
@@ -194,16 +192,15 @@ TEST_CASE("HTTP: GET route returns JSON") {
                 resp.Json(R"({"message":"hello"})");
               });
 
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
   REQUIRE(server.Start("127.0.0.1", port));
 
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  auto resp = DoHttpRequest(
-      tr, port,
-      "GET /api/hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+  auto resp = DoHttpRequest(tr, port,
+                            "GET /api/hello HTTP/1.1\r\nHost: "
+                            "localhost\r\nConnection: close\r\n\r\n");
 
   CHECK(resp.status_code == 200);
   CHECK(resp.body.find("\"message\"") != std::string::npos);
@@ -225,22 +222,22 @@ TEST_CASE("HTTP: POST route echoes body") {
                  resp.Text(body);
                });
 
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
   REQUIRE(server.Start("127.0.0.1", port));
 
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   std::string body = "hello post body";
-  std::string req = "POST /api/echo HTTP/1.1\r\n"
-                    "Host: localhost\r\n"
-                    "Content-Length: " +
-                    std::to_string(body.size()) +
-                    "\r\n"
-                    "Connection: close\r\n"
-                    "\r\n" +
-                    body;
+  std::string req =
+      "POST /api/echo HTTP/1.1\r\n"
+      "Host: localhost\r\n"
+      "Content-Length: " +
+      std::to_string(body.size()) +
+      "\r\n"
+      "Connection: close\r\n"
+      "\r\n" +
+      body;
 
   auto resp = DoHttpRequest(tr, port, req);
   CHECK(resp.status_code == 200);
@@ -262,16 +259,15 @@ TEST_CASE("HTTP: route with path parameter") {
                 resp.Json(R"({"id":")" + id + R"("})");
               });
 
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
   REQUIRE(server.Start("127.0.0.1", port));
 
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  auto resp = DoHttpRequest(
-      tr, port,
-      "GET /api/users/42 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+  auto resp = DoHttpRequest(tr, port,
+                            "GET /api/users/42 HTTP/1.1\r\nHost: "
+                            "localhost\r\nConnection: close\r\n\r\n");
 
   CHECK(resp.status_code == 200);
   CHECK(resp.body.find("\"id\"") != std::string::npos);
@@ -293,16 +289,15 @@ TEST_CASE("HTTP: query parameters") {
                 resp.Json(R"({"query":")" + q + R"("})");
               });
 
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
   REQUIRE(server.Start("127.0.0.1", port));
 
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  auto resp = DoHttpRequest(
-      tr, port,
-      "GET /api/search?q=test HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+  auto resp = DoHttpRequest(tr, port,
+                            "GET /api/search?q=test HTTP/1.1\r\nHost: "
+                            "localhost\r\nConnection: close\r\n\r\n");
 
   CHECK(resp.status_code == 200);
   CHECK(resp.body.find("test") != std::string::npos);
@@ -317,21 +312,18 @@ TEST_CASE("HTTP: 404 for unknown route") {
   REQUIRE(port != 0);
 
   auto router = std::make_unique<HttpRouter>();
-  router->Get("/api/exists",
-              [](const HttpRequestContext& ctx, HttpResponse& resp) {
-                resp.Text("ok");
-              });
+  router->Get("/api/exists", [](const HttpRequestContext& ctx,
+                                HttpResponse& resp) { resp.Text("ok"); });
 
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
   REQUIRE(server.Start("127.0.0.1", port));
 
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  auto resp = DoHttpRequest(
-      tr, port,
-      "GET /api/nonexistent HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+  auto resp = DoHttpRequest(tr, port,
+                            "GET /api/nonexistent HTTP/1.1\r\nHost: "
+                            "localhost\r\nConnection: close\r\n\r\n");
 
   CHECK(resp.status_code == 404);
 
@@ -345,13 +337,10 @@ TEST_CASE("HTTP: CORS preflight") {
   REQUIRE(port != 0);
 
   auto router = std::make_unique<HttpRouter>();
-  router->Get("/api/data",
-              [](const HttpRequestContext& ctx, HttpResponse& resp) {
-                resp.Text("data");
-              });
+  router->Get("/api/data", [](const HttpRequestContext& ctx,
+                              HttpResponse& resp) { resp.Text("data"); });
 
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
   server.AddAllowedOrigin("*");
   REQUIRE(server.Start("127.0.0.1", port));
@@ -359,13 +348,22 @@ TEST_CASE("HTTP: CORS preflight") {
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   // OPTIONS is handled by HttpServer itself as CORS preflight
-  auto resp = DoHttpRequest(
-      tr, port,
-      "OPTIONS /api/data HTTP/1.1\r\nHost: localhost\r\n"
-      "Origin: http://example.com\r\nConnection: close\r\n\r\n");
+  auto resp =
+      DoHttpRequest(tr, port,
+                    "OPTIONS /api/data HTTP/1.1\r\nHost: localhost\r\n"
+                    "Origin: http://example.com\r\nConnection: close\r\n\r\n");
 
   CHECK(resp.status_code == 204);
   CHECK(resp.raw.find("Access-Control-Allow-Methods") != std::string::npos);
+
+  resp = DoHttpRequest(tr, port,
+                       "GET /api/data HTTP/1.1\r\nHost: localhost\r\n"
+                       "Origin: http://example.com\r\nConnection: close\r\n"
+                       "\r\n");
+
+  CHECK(resp.status_code == 200);
+  CHECK(resp.raw.find("Access-Control-Allow-Origin: http://example.com") !=
+        std::string::npos);
 
   tr.PostTask([&server]() { server.Stop(); });
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -386,23 +384,23 @@ TEST_CASE("HTTP: POST JSON content-type detection") {
                  }
                });
 
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
   REQUIRE(server.Start("127.0.0.1", port));
 
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   std::string body = R"({"key":"value"})";
-  std::string req = "POST /api/json HTTP/1.1\r\n"
-                    "Host: localhost\r\n"
-                    "Content-Type: application/json\r\n"
-                    "Content-Length: " +
-                    std::to_string(body.size()) +
-                    "\r\n"
-                    "Connection: close\r\n"
-                    "\r\n" +
-                    body;
+  std::string req =
+      "POST /api/json HTTP/1.1\r\n"
+      "Host: localhost\r\n"
+      "Content-Type: application/json\r\n"
+      "Content-Length: " +
+      std::to_string(body.size()) +
+      "\r\n"
+      "Connection: close\r\n"
+      "\r\n" +
+      body;
 
   auto resp = DoHttpRequest(tr, port, req);
   CHECK(resp.status_code == 200);
@@ -425,13 +423,10 @@ TEST_CASE("HTTP: middleware") {
     return true;  // Continue to route
   });
 
-  router->Get("/api/test",
-              [](const HttpRequestContext& ctx, HttpResponse& resp) {
-                resp.Text("ok");
-              });
+  router->Get("/api/test", [](const HttpRequestContext& ctx,
+                              HttpResponse& resp) { resp.Text("ok"); });
 
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
   REQUIRE(server.Start("127.0.0.1", port));
 
@@ -476,18 +471,17 @@ TEST_CASE("HTTP: streaming file response") {
                 resp.File(temp_path);
               });
 
-  auto handler =
-      std::make_unique<RouterHttpRequestHandler>(std::move(router));
+  auto handler = std::make_unique<RouterHttpRequestHandler>(std::move(router));
   HttpServer server(&tr, handler.get());
   REQUIRE(server.Start("127.0.0.1", port));
 
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  auto resp = DoHttpRequest(
-      tr, port,
-      "GET /download HTTP/1.1\r\nHost: localhost\r\nConnection: "
-      "close\r\n\r\n",
-      5000);
+  auto resp =
+      DoHttpRequest(tr, port,
+                    "GET /download HTTP/1.1\r\nHost: localhost\r\nConnection: "
+                    "close\r\n\r\n",
+                    5000);
 
   CHECK(resp.status_code == 200);
   CHECK(resp.body.size() == 128 * 1024);
@@ -499,5 +493,4 @@ TEST_CASE("HTTP: streaming file response") {
 
   tr.PostTask([&server]() { server.Stop(); });
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
 }

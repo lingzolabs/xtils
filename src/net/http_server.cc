@@ -1,21 +1,44 @@
 #include "xtils/net/http_server.h"
 
 #include <array>
+#include <cctype>
 #include <fstream>
 #include <vector>
 
 #include "xtils/logging/logger.h"
 #include "xtils/net/websocket_common.h"
 #include "xtils/utils/string_utils.h"
-#include "xtils/utils/string_utils.h"
 
 namespace xtils {
+namespace {
+
+bool HasConnectionToken(std::string_view header_value, std::string_view token) {
+  size_t start = 0;
+  while (start <= header_value.size()) {
+    size_t comma = header_value.find(',', start);
+    auto part = header_value.substr(start, comma == std::string_view::npos
+                                               ? std::string_view::npos
+                                               : comma - start);
+    while (!part.empty() &&
+           std::isspace(static_cast<unsigned char>(part.front()))) {
+      part.remove_prefix(1);
+    }
+    while (!part.empty() &&
+           std::isspace(static_cast<unsigned char>(part.back()))) {
+      part.remove_suffix(1);
+    }
+    if (CaseInsensitiveEq(part, token)) return true;
+    if (comma == std::string_view::npos) break;
+    start = comma + 1;
+  }
+  return false;
+}
+
+}  // namespace
 
 HttpServer::HttpServer(TaskRunner* task_runner, HttpRequestHandler* req_handler,
                        HttpServerConfig config)
-    : task_runner_(task_runner),
-      req_handler_(req_handler),
-      config_(config) {}
+    : task_runner_(task_runner), req_handler_(req_handler), config_(config) {}
 HttpServer::~HttpServer() { Stop(); }
 
 bool HttpServer::Start(const std::string& ip, int port) {
@@ -70,8 +93,7 @@ void HttpServer::OnNewIncomingConnection(
     return;
   }
   LogD("[HTTP] New connection");
-  clients_.emplace_back(std::move(sock),
-                        config_.max_payload_size + 4096);
+  clients_.emplace_back(std::move(sock), config_.max_payload_size + 4096);
 }
 
 void HttpServer::OnConnect(UnixSocket*, bool) {}
@@ -174,26 +196,35 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
         return 0;
       }
       auto hdr_name = line.substr(0, col);
-      auto hdr_value = line.substr(col + 2);
+      std::string hdr_value_storage =
+          TrimWhitespace(std::string(line.substr(col + 1)));
+      std::string_view hdr_value(hdr_value_storage);
       if (http_req.num_headers < http_req.headers.size()) {
         http_req.headers[http_req.num_headers++] = {std::string(hdr_name),
-                                                    std::string(hdr_value)};
+                                                    hdr_value_storage};
       } else {
         conn->SendResponseAndClose("400 Bad Request", {},
                                    "Too many HTTP headers");
+        return 0;
       }
 
       if (CaseInsensitiveEq(hdr_name, "content-length")) {
-        body_size = static_cast<size_t>(atoi(std::string(hdr_value).c_str()));
+        auto parsed = StringViewToUInt64(hdr_value);
+        if (!parsed) {
+          conn->SendResponseAndClose("400 Bad Request", {},
+                                     "Invalid Content-Length");
+          return 0;
+        }
+        body_size = static_cast<size_t>(*parsed);
       } else if (CaseInsensitiveEq(hdr_name, "origin")) {
         has_origin = true;
         http_req.origin = hdr_value;
         if (IsOriginAllowed(hdr_value))
           conn->origin_allowed_ = std::string(hdr_value);
       } else if (CaseInsensitiveEq(hdr_name, "connection")) {
-        conn->keepalive_ = CaseInsensitiveEq(hdr_value, "keep-alive");
+        conn->keepalive_ = HasConnectionToken(hdr_value, "keep-alive");
         http_req.is_websocket_handshake =
-            CaseInsensitiveEq(hdr_value, "upgrade");
+            HasConnectionToken(hdr_value, "upgrade");
       }
     }
   }
@@ -408,8 +439,8 @@ size_t HttpServer::ParseOneWebsocketFrame(HttpServerConnection* conn) {
     // because in all our use cases we need only a byte stream without caring
     // about message boundaries.
     WebsocketMessage msg(conn);
-    msg.data =
-        std::string_view(reinterpret_cast<const char*>(payload_start), payload_len);
+    msg.data = std::string_view(reinterpret_cast<const char*>(payload_start),
+                                payload_len);
     msg.is_text = opcode == WebSocketOpcode::kText;
     req_handler_->OnWebsocketMessage(msg);
   } else if (opcode == WebSocketOpcode::kClose) {
@@ -460,7 +491,7 @@ void HttpServerConnection::SendResponseHeaders(const char* http_code,
     append(keepalive_ ? "Connection: keep-alive\r\n" : "Connection: close\r\n");
   }
   if (!origin_allowed_.empty()) {
-    StackString<128> hdr_str("Acess-Control-Allow-Origin: %s",
+    StackString<128> hdr_str("Access-Control-Allow-Origin: %s",
                              origin_allowed_.c_str());
     append(hdr_str.ToStr().c_str());
     append("\r\n");
@@ -479,7 +510,7 @@ void HttpServerConnection::SendResponseBody(const void* data, size_t len) {
   }
   content_len_actual_ += len;
   XTILS_CHECK(content_len_actual_ <= content_len_headers_ ||
-        content_len_headers_ == kOmitContentLength);
+              content_len_headers_ == kOmitContentLength);
   sock->Send(data, len);
 }
 
@@ -487,7 +518,8 @@ void HttpServerConnection::Close() { sock->Shutdown(/*notify=*/true); }
 
 void HttpServerConnection::SendResponse(const char* http_code,
                                         const HttpHeaders& headers,
-                                        std::string_view content, bool force_close) {
+                                        std::string_view content,
+                                        bool force_close) {
   if (force_close) keepalive_ = false;
   SendResponseHeaders(http_code, headers, content.size());
   SendResponseBody(content.data(), content.size());

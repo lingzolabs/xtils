@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include "xtils/tasks/thread_task_runner.h"
+
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
@@ -59,6 +61,12 @@ TEST_CASE("HttpUrl: empty/invalid URL") {
 
   HttpUrl url2("not-a-url");
   CHECK_FALSE(url2.IsValid());
+
+  HttpUrl url3("http://localhost:notaport/");
+  CHECK_FALSE(url3.IsValid());
+
+  HttpUrl url4("http://localhost:70000/");
+  CHECK_FALSE(url4.IsValid());
 }
 
 TEST_CASE("HttpUrl: base() strips path and query") {
@@ -152,6 +160,17 @@ TEST_CASE("HttpRequest: multipart body") {
   CHECK(req.multipart_fields[0].value == "value1");
 }
 
+TEST_CASE("HttpClient: sync invalid URL returns without deadlock") {
+  auto task_runner = ThreadTaskRunner::CreateAndStart("http_client_invalid");
+  HttpClient client(&task_runner);
+
+  xtils::HttpRequest req;
+  auto resp = client.Request(req);
+
+  CHECK(resp.status_code == 0);
+  CHECK(resp.status_message == "Invalid URL");
+}
+
 // ============================================================================
 // HttpResponse struct tests
 // ============================================================================
@@ -223,8 +242,8 @@ TEST_CASE("HttpUtils: URL encode/decode roundtrip") {
 }
 
 TEST_CASE("HttpUtils: form data encode/parse") {
-  std::map<std::string, std::string> data = {
-      {"name", "alice"}, {"city", "new york"}};
+  std::map<std::string, std::string> data = {{"name", "alice"},
+                                             {"city", "new york"}};
 
   std::string encoded = HttpUtils::FormDataEncode(data);
   CHECK_FALSE(encoded.empty());
@@ -276,6 +295,7 @@ TEST_CASE("HttpUtils: method validation") {
 
 TEST_CASE("HttpUtils: status message") {
   CHECK(HttpUtils::GetStatusMessage(200).find("OK") != std::string::npos);
-  CHECK(HttpUtils::GetStatusMessage(404).find("Not Found") != std::string::npos);
+  CHECK(HttpUtils::GetStatusMessage(404).find("Not Found") !=
+        std::string::npos);
   CHECK(HttpUtils::GetStatusMessage(500).find("Internal") != std::string::npos);
 }

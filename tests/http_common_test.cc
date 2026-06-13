@@ -53,6 +53,12 @@ TEST_CASE("HttpUrl: path only, no query or fragment") {
 TEST_CASE("HttpUrl: invalid URL") {
   HttpUrl url("not-a-url");
   CHECK_FALSE(url.IsValid());
+
+  HttpUrl invalid_port("http://localhost:notaport/");
+  CHECK_FALSE(invalid_port.IsValid());
+
+  HttpUrl out_of_range_port("http://localhost:70000/");
+  CHECK_FALSE(out_of_range_port.IsValid());
 }
 
 TEST_CASE("HttpUrl: ToString round trip") {
@@ -106,6 +112,7 @@ TEST_CASE("HttpUtils: UrlEncode preserves safe chars") {
 TEST_CASE("HttpUtils: UrlDecode basic") {
   CHECK(HttpUtils::UrlDecode("hello%20world") == "hello world");
   CHECK(HttpUtils::UrlDecode("a%2Bb") == "a+b");
+  CHECK(HttpUtils::UrlDecode("%zz") == "%zz");
 }
 
 TEST_CASE("HttpUtils: UrlDecode plus as space") {
@@ -136,7 +143,7 @@ TEST_CASE("HttpUtils: ParseFormData") {
 
 TEST_CASE("HttpUtils: FormData round trip with encoding") {
   std::map<std::string, std::string> data = {{"key", "hello world"},
-                                              {"name", "foo&bar"}};
+                                             {"name", "foo&bar"}};
   std::string encoded = HttpUtils::FormDataEncode(data);
   auto parsed = HttpUtils::ParseFormData(encoded);
   CHECK(parsed["key"] == "hello world");
@@ -251,10 +258,12 @@ TEST_CASE("HttpUtils: header utilities") {
   CHECK_FALSE(HttpUtils::HasHeader(headers, "NonExistent"));
   CHECK(HttpUtils::GetHeaderValue(headers, "NonExistent") == "");
 
+  HttpUtils::AddHeader(headers, "X-Empty", "");
+  CHECK(HttpUtils::HasHeader(headers, "X-Empty"));
+
   // Update existing header
   HttpUtils::AddHeader(headers, "Content-Type", "application/json");
   CHECK(HttpUtils::GetHeaderValue(headers, "Content-Type") ==
         "application/json");
-  CHECK(headers.size() == 2);  // Should update, not add duplicate
+  CHECK(headers.size() == 3);  // Should update, not add duplicate
 }
-

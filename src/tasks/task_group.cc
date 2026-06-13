@@ -24,7 +24,10 @@ void TaskGroup::runLoop(int id) {
         task();
       } catch (const std::exception& e) {
         LogW("task exception: %s", e.what());
+      } catch (...) {
+        LogW("task exception: unknown");
       }
+      pending_tasks_.fetch_sub(1);
     }
     if (exit_id_.load() == id) {
       loopExited(id);
@@ -63,6 +66,7 @@ TaskGroup::~TaskGroup() {
 void TaskGroup::PostTask(Task task) { main_runner_->PostTask(task); }
 
 void TaskGroup::PostAsyncTask(Task task, uint32_t ms) {
+  pending_tasks_.fetch_add(1);
   if (ms == 0) {
     tasks_.Push(task);
   } else {
@@ -77,7 +81,7 @@ void TaskGroup::PostAsyncTask(Task task, uint32_t ms) {
 
 std::shared_ptr<TaskRunner> TaskGroup::MainRunner() { return main_runner_; }
 
-bool TaskGroup::IsBusy() { return tasks_.Size() > threads_.size() * 2; }
+bool TaskGroup::IsBusy() { return pending_tasks_.load() > 0; }
 int TaskGroup::Size() { return threads_.size(); }
 void TaskGroup::Stop() {
   quit_ = true;
@@ -85,5 +89,15 @@ void TaskGroup::Stop() {
   for (auto& t : threads_) {
     if (t.joinable()) t.join();
   }
+}
+
+bool TaskGroup::StopWaitAll(std::chrono::seconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (IsBusy()) {
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  Stop();
+  return true;
 }
 }  // namespace xtils

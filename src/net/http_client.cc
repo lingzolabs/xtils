@@ -64,6 +64,7 @@ bool HttpResponse::HasHeader(const std::string& name) const {
 // HttpClient implementation
 HttpClient::HttpClient(TaskRunner* task_runner)
     : task_runner_(task_runner),
+      listener_(nullptr),
       state_(State::kIdle),
       default_timeout_ms_(30000),
       follow_redirects_(true),
@@ -79,17 +80,18 @@ HttpClient::HttpClient(TaskRunner* task_runner)
 HttpClient::~HttpClient() { Cancel(); }
 
 HttpResponse HttpClient::Request(const HttpRequest& request) {
-  std::unique_lock<std::mutex> lock(sync_mutex_);
-
   current_.Reset();
   current_.completed.store(false);
   if (!RequestAsync(request, nullptr)) {
     HttpResponse error_response;
     error_response.status_code = 0;
-    error_response.status_message = "Failed to start request";
+    error_response.status_message = current_.response.status_message.empty()
+                                        ? "Failed to start request"
+                                        : current_.response.status_message;
     return error_response;
   }
 
+  std::unique_lock<std::mutex> lock(sync_mutex_);
   auto timeout = std::chrono::milliseconds(
       request.timeout_ms > 0 ? request.timeout_ms : default_timeout_ms_);
   if (!sync_cv_.wait_for(lock, timeout,
@@ -305,11 +307,15 @@ void HttpClient::OnConnected(bool success) {
 }
 
 void HttpClient::OnDataReceived(const void* data, size_t len) {
+  state_.store(State::kReceivingResponse);
   ProcessReceivedData(data, len);
 }
 
 void HttpClient::OnDisconnected() {
-  if (state_ == State::kReceivingResponse) {
+  if (current_.headers_received && !current_.chunked_encoding &&
+      !current_.has_content_length && !current_.completed.load()) {
+    CompleteRequest();
+  } else if (state_ == State::kReceivingResponse) {
     // Connection closed, complete the response if we have enough data
     CompleteRequest();
   }
@@ -500,7 +506,13 @@ void HttpClient::ProcessReceivedData(const void* data, size_t len) {
       std::string content_length_str =
           current_.response.GetHeader("Content-Length");
       if (!content_length_str.empty()) {
-        current_.content_length = std::stoull(content_length_str);
+        auto content_length = StringToUInt64(content_length_str);
+        if (!content_length) {
+          HandleError("Invalid Content-Length header");
+          return;
+        }
+        current_.has_content_length = true;
+        current_.content_length = *content_length;
         current_.response.content_length = current_.content_length;
         if (current_.content_length > max_receive_buffer_size_) {
           HandleError("Response content length exceeds maximum buffer size");
@@ -599,6 +611,8 @@ void HttpClient::ProcessFixedLengthBody() {  // Call body data callback if in
   }
   current_.receive_buffer.clear();  // for next data
 
+  if (!current_.has_content_length) return;
+
   // Check if response is complete
   if (current_.response.body.size() >= current_.content_length) {
     CompleteRequest();
@@ -648,16 +662,16 @@ void HttpClient::HandleRedirect() {
   // Reset state for new request
   current_.receive_buffer.clear();
   current_.headers_received = false;
+  current_.has_content_length = false;
   current_.content_length = 0;
   current_.bytes_received = 0;
+  current_.chunked_encoding = false;
+  current_.chunk_size = -1;
   current_.response = HttpResponse();
 
   // Disconnect and reconnect
   if (transport_) transport_->Close();
 
-  if (listener_) {
-    listener_->OnRedirect(this, location);
-  }
   current_.request.url = new_url;
   // Send new request
   if (!ConnectToHost(new_url)) {
@@ -681,6 +695,7 @@ void HttpClient::CompleteRequest() {
 
   // Mark as completed
   current_.completed.store(true);
+  last_response_ = current_.response;
 
   // Notify listener
   if (listener_) {
@@ -703,6 +718,7 @@ void HttpClient::HandleError(const std::string& error) {
   current_.response.status_message = error;
 
   current_.completed.store(true);
+  last_response_ = current_.response;
 
   if (listener_) {
     listener_->OnHttpError(this, error);

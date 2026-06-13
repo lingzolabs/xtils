@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "xtils/net/transport/transport.h"
 #include "xtils/net/http_common.h"
+#include "xtils/net/transport/transport.h"
 #include "xtils/tasks/task_runner.h"
 
 namespace xtils {
@@ -226,6 +226,7 @@ class HttpClient : public TransportEventListener {
     HttpResponse response;
     std::string receive_buffer;
     bool headers_received = false;
+    bool has_content_length = false;
     size_t content_length = 0;
     size_t bytes_received = 0;
     bool chunked_encoding = false;
@@ -243,6 +244,7 @@ class HttpClient : public TransportEventListener {
       response = HttpResponse();
       receive_buffer.clear();
       headers_received = false;
+      has_content_length = false;
       content_length = 0;
       bytes_received = 0;
       chunked_encoding = false;

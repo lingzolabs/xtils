@@ -30,8 +30,9 @@ Config& Config::Define(const std::string& name, const std::string& description,
                        const Json& default_value, bool required) {
   options_[name] = Option(name, description, default_value, required);
 
-  // Apply default value immediately if not already set
-  if (!Has(name)) {
+  // Required options intentionally do not get their placeholder default value.
+  // They must be provided by file, CLI, or Set().
+  if (!required && !Has(name)) {
     Set(name, default_value);
   }
 
@@ -133,7 +134,8 @@ bool Config::ParseArgs(const std::vector<std::string>& args, bool allow_exit) {
       continue;
     }
 
-    // For boolean options, if no value is provided or empty value, treat as true
+    // For boolean options, if no value is provided or empty value, treat as
+    // true
     if (has_value && value_str.empty() &&
         option_it->second.default_value.is_bool()) {
       Set(key, Json(true));
@@ -360,7 +362,7 @@ std::optional<Json> Config::parse_value(const std::string& value_str,
 
 void Config::apply_defaults() {
   for (const auto& [name, option] : options_) {
-    if (!Has(name)) {
+    if (!option.required && !Has(name)) {
       Set(name, option.default_value);
     }
   }
