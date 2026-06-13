@@ -3,12 +3,13 @@
 #include <vector>
 
 #include "xtils/app/app.h"
+#include "xtils/app/auto-gen.h"
 #include "xtils/system/signal_handler.h"
 
 void app_version(uint32_t& major, uint32_t& minor, uint32_t& patch) {
-  major = 1;
-  minor = 1;
-  patch = 0;
+  major = XTILS_VER_MAJOR;
+  minor = XTILS_VER_MINOR;
+  patch = XTILS_VER_PATCH;
 }
 
 __attribute__((weak)) void app_main(xtils::App& ctx,

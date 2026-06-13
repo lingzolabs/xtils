@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(xtils)
+# Version from git tags
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/version.cmake)
+
+project(xtils VERSION ${XTILS_VERSION_STRING})
 
 option(INSPECT_DISABLE "Disable inspect module" OFF)
 option(BUILD_TESTS "Build tests" OFF)
@@ -142,7 +145,7 @@ install(EXPORT xtils-targets
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
     xtils-config-version.cmake
-    VERSION 1.0.0
+    VERSION ${XTILS_VERSION_STRING}
     COMPATIBILITY AnyNewerVersion
 )
 

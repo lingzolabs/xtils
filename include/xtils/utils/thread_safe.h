@@ -68,6 +68,7 @@ class ThreadSafe {
     cv_.notify_all();
   }
 
+#ifdef XTILS_ENABLE_DEPRECATED
   // Deprecated wrappers
   [[deprecated("Use PopWait() instead")]]
   bool pop_wait(value_type& e,
@@ -86,6 +87,7 @@ class ThreadSafe {
   std::size_t size() { return Size(); }
   [[deprecated("Use Quit() instead")]]
   void quit() { Quit(); }
+#endif  // XTILS_ENABLE_DEPRECATED
 
  private:
   T data_;

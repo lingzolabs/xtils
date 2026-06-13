@@ -34,6 +34,7 @@ class EventTestFixture {
  public:
   EventTestFixture() : tg_(std::make_unique<TaskGroup>(2)) {}
   std::shared_ptr<TaskGroup> tg_;
+  ScopedSubscriptions subs_;
   void waitForTasks(int ms = 100) {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
   }
@@ -51,13 +52,11 @@ TEST_CASE_FIXTURE(EventTestFixture,
   std::atomic<bool> called{false};
   std::atomic<int> received{0};
 
-  // connect for enum type requires explicit template parameter
-  em.Connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
+  subs_ += em.Connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
     called = true;
     received = static_cast<int>(id);
   });
 
-  // emit for enum type should also use explicit template parameter
   em.Emit<TestEventIds>(EVENT_INT_DATA);
   waitForTasks();
 
@@ -66,7 +65,7 @@ TEST_CASE_FIXTURE(EventTestFixture,
 
   // multiple callbacks for same enum id
   std::atomic<int> count{0};
-  em.Connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
+  subs_ += em.Connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
     (void)id;
     ++count;
   });
@@ -83,8 +82,7 @@ TEST_CASE_FIXTURE(EventTestFixture,
     std::atomic<bool> got{false};
     std::string value;
 
-    // connect for non-enum type requires explicit template parameter
-    em.Connect<std::string>([&](const std::string& s) {
+    subs_ += em.Connect<std::string>([&](const std::string& s) {
       got = true;
       value = s;
     });
@@ -100,7 +98,7 @@ TEST_CASE_FIXTURE(EventTestFixture,
     std::atomic<bool> got{false};
     CustomData out{0, ""};
 
-    em.Connect<CustomData>([&](const CustomData& d) {
+    subs_ += em.Connect<CustomData>([&](const CustomData& d) {
       got = true;
       out = d;
     });
@@ -121,11 +119,11 @@ TEST_CASE_FIXTURE(
 
   std::atomic<int> c1{0}, c2{0};
 
-  em.Connect<std::string>([&](const std::string& s) {
+  subs_ += em.Connect<std::string>([&](const std::string& s) {
     (void)s;
     ++c1;
   });
-  em.Connect<std::string>([&](const std::string& s) {
+  subs_ += em.Connect<std::string>([&](const std::string& s) {
     (void)s;
     ++c2;
   });
@@ -144,7 +142,7 @@ TEST_CASE_FIXTURE(
   EventManager em(tg_);
   std::atomic<int> total{0};
 
-  em.Connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
+  subs_ += em.Connect<TestEventIds>(EVENT_INT_DATA, [&](const TestEventIds& id) {
     (void)id;
     ++total;
   });
@@ -178,7 +176,7 @@ TEST_CASE_FIXTURE(
 
   {
     EventManager em(local_tg);
-    em.Connect<std::string>([&](const std::string& s) {
+    auto sub = em.Connect<std::string>([&](const std::string& s) {
       (void)s;
       executed = true;
     });
@@ -188,6 +186,45 @@ TEST_CASE_FIXTURE(
 
   CHECK(executed);
   CHECK(local_tg != nullptr);
+}
+
+TEST_CASE_FIXTURE(EventTestFixture, "Subscription: disconnect stops delivery") {
+  EventManager em(tg_);
+  std::atomic<int> count{0};
+
+  auto sub = em.Connect<std::string>([&](const std::string& s) {
+    (void)s;
+    ++count;
+  });
+
+  em.Emit<std::string>(std::string("first"));
+  waitForTasks();
+  CHECK(count == 1);
+
+  sub.Disconnect();
+
+  em.Emit<std::string>(std::string("second"));
+  waitForTasks();
+  CHECK(count == 1);  // should not increment
+}
+
+TEST_CASE_FIXTURE(EventTestFixture, "Subscription: RAII auto-disconnect") {
+  EventManager em(tg_);
+  std::atomic<int> count{0};
+
+  {
+    auto sub = em.Connect<std::string>([&](const std::string& s) {
+      (void)s;
+      ++count;
+    });
+    em.Emit<std::string>(std::string("inside"));
+    waitForTasks();
+    CHECK(count == 1);
+  }  // sub destroyed here
+
+  em.Emit<std::string>(std::string("outside"));
+  waitForTasks();
+  CHECK(count == 1);  // should not increment
 }
 
 int main() {

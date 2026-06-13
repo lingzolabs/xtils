@@ -54,9 +54,11 @@ class Service : public IService {
   }
 
   // Deprecated wrappers
+#ifdef XTILS_ENABLE_DEPRECATED
   template <typename T>
   [[deprecated("Use Emit() instead")]]
   void emit(const T& e) { Emit<T>(e); }
+#endif
 
  protected:
   WeakPtrFactory<Service<ServiceType>> weak_factory_;
@@ -93,6 +95,7 @@ void RunForever();
 void RunDaemon();
 
 // Deprecated wrappers
+#ifdef XTILS_ENABLE_DEPRECATED
 [[deprecated("Use IsOk() instead")]]
 inline bool isOk() { return IsOk(); }
 [[deprecated("Use Init() instead")]]
@@ -105,4 +108,5 @@ inline void shutdown() { Shutdown(); }
 inline void run_forever() { RunForever(); }
 [[deprecated("Use RunDaemon() instead")]]
 inline void run_daemon() { RunDaemon(); }
+#endif  // XTILS_ENABLE_DEPRECATED
 }  // namespace xtils

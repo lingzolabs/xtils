@@ -33,6 +33,7 @@
 #include <iostream>
 #include <sstream>
 
+namespace xtils {
 namespace file_utils {
 
 // Use the constants from the header
@@ -542,3 +543,4 @@ bool change_directory(const std::string& path) {
 }
 
 }  // namespace file_utils
+}  // namespace xtils

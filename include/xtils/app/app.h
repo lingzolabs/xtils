@@ -28,7 +28,7 @@ class App {
   void Register(std::list<std::shared_ptr<IService>> services);
   void Register(std::shared_ptr<IService> p);
 
-  // Deprecated: use Register() instead
+#ifdef XTILS_ENABLE_DEPRECATED
   [[deprecated("Use Register() instead")]]
   void registor(std::list<std::shared_ptr<IService>> services) {
     Register(std::move(services));
@@ -37,6 +37,7 @@ class App {
   void registor(std::shared_ptr<IService> p) {
     Register(std::move(p));
   }
+#endif  // XTILS_ENABLE_DEPRECATED
 
  public:
   // until shutdown
@@ -69,18 +70,19 @@ class App {
   }
 
   template <typename Event, typename TypedCallback>
-  void Connect(Event id, TypedCallback cb) {
-    em_->Connect<Event>(id, cb);
+  Subscription Connect(Event id, TypedCallback cb) {
+    return em_->Connect<Event>(id, cb);
   }
 
   template <typename Event, typename TypedCallback>
-  void Connect(TypedCallback cb) {
-    em_->Connect<Event>(cb);
+  Subscription Connect(TypedCallback cb) {
+    return em_->Connect<Event>(cb);
   }
 
   const Config& Conf() { return config_; }
 
-  // Deprecated wrappers
+#ifdef XTILS_ENABLE_DEPRECATED
+  // Deprecated wrappers (define XTILS_ENABLE_DEPRECATED to use)
   [[deprecated("Use Ins() instead")]]
   static App* ins() { return Ins(); }
   [[deprecated("Use Run() instead")]]
@@ -106,12 +108,13 @@ class App {
   void emit(const Event& e) { Emit<Event>(e); }
   template <typename Event, typename TypedCallback>
   [[deprecated("Use Connect() instead")]]
-  void connect(Event id, TypedCallback cb) { Connect<Event>(id, std::move(cb)); }
+  Subscription connect(Event id, TypedCallback cb) { return Connect<Event>(id, std::move(cb)); }
   template <typename Event, typename TypedCallback>
   [[deprecated("Use Connect() instead")]]
-  void connect(TypedCallback cb) { Connect<Event>(std::move(cb)); }
+  Subscription connect(TypedCallback cb) { return Connect<Event>(std::move(cb)); }
   [[deprecated("Use Conf() instead")]]
   const Config& conf() { return Conf(); }
+#endif  // XTILS_ENABLE_DEPRECATED
 
  private:
   void deinit();

@@ -48,3 +48,8 @@ add_xtils_test(test_http_client http_client_test.cc)
 if(SCRIPTING_ENABLE)
   add_xtils_test(test_scripting scripting_test.cc)
 endif()
+
+add_xtils_test(test_result result_test.cc)
+add_xtils_test(test_signal signal_test.cc)
+add_xtils_test(test_serialize serialize_test.cc)
+add_xtils_test(test_future future_test.cc)
