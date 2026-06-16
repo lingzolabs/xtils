@@ -83,6 +83,7 @@ class UnixSocketRaw {
 
   bool Bind(const std::string& socket_name);
   bool Listen();
+  UnixSocketRaw Accept();
   bool Connect(const std::string& socket_name);
   bool SetTxTimeout(uint32_t timeout_ms);
   bool SetRxTimeout(uint32_t timeout_ms);

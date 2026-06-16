@@ -600,10 +600,13 @@ void SetMaxMessageSize(size_t);
 void SetVerifySSL(bool);
 ```
 
-### JSON-RPC IPC over Unix Sockets
+### JSON-RPC IPC over Stream Sockets
 
 ```cpp
 #include "xtils/net/ipc_channel.h"
+
+// Address can be a Unix socket path, abstract Unix socket, TCP IPv4, or TCP IPv6:
+//   "/tmp/app.sock", "@app", "127.0.0.1:9000", "[::1]:9000"
 
 // Server side
 IpcServer server("/tmp/app.sock");
@@ -625,7 +628,7 @@ Subscription sub = client.OnNotify("broadcast", [](auto method, auto params) {})
 client.Disconnect();
 ```
 
-Wire format is newline-delimited JSON-RPC 2.0. Requests include `jsonrpc`, `id`, `method`, and optional `params`; notifications omit `id` and do not receive a response.
+Wire format is newline-delimited JSON-RPC 2.0. Requests include `jsonrpc`, `id`, `method`, and optional `params`; notifications omit `id` and do not receive a response. The same API works over filesystem Unix sockets, Linux abstract Unix sockets, TCP IPv4, and TCP IPv6 addresses.
 
 ### Multipart Parser
 

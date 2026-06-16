@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 
+#include "xtils/system/unix_socket.h"
 #include "xtils/tasks/task_runner.h"
 #include "xtils/utils/json.h"
 #include "xtils/utils/result.h"
@@ -27,7 +28,13 @@ constexpr int kInternalError = -32603;
 // Server-defined errors: -32000 to -32099
 }  // namespace jsonrpc
 
-// JSON-RPC 2.0 compliant IPC over Unix domain sockets.
+// JSON-RPC 2.0 compliant IPC over stream sockets.
+//
+// Address format follows UnixSocketRaw/GetSockFamily:
+//   /path/to/socket : filesystem Unix domain socket
+//   @abstract_name  : abstract Unix domain socket
+//   127.0.0.1:9000  : TCP/IPv4 socket
+//   [::1]:9000      : TCP/IPv6 socket
 //
 // Wire format: newline-delimited JSON-RPC 2.0 messages.
 //
@@ -38,7 +45,8 @@ constexpr int kInternalError = -32603;
 //   {"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
 //
 // Response (error):
-//   {"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}
+//   {"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not
+//   found"}}
 //
 // Notification (no id, no response expected):
 //   {"jsonrpc":"2.0","method":"notify","params":{"event":"data"}}
@@ -51,8 +59,7 @@ class IpcServer {
   // Notification handler receives params but returns nothing
   using NotifyHandler = std::function<void(const Json& params)>;
 
-  explicit IpcServer(const std::string& socket_path,
-                     TaskRunner* runner = nullptr);
+  explicit IpcServer(const std::string& address, TaskRunner* runner = nullptr);
   ~IpcServer();
 
   // Register a method handler (responds to client)
@@ -73,7 +80,8 @@ class IpcServer {
 
  private:
   struct ClientConn {
-    int fd = -1;
+    UnixSocketRaw socket;
+    std::mutex write_mu;
     std::string read_buf;
     std::thread read_thread;
   };
@@ -81,11 +89,13 @@ class IpcServer {
   void AcceptLoop();
   void ClientReadLoop(std::shared_ptr<ClientConn> conn);
   void HandleMessage(std::shared_ptr<ClientConn> conn, const std::string& line);
-  void SendTo(int fd, const std::string& msg);
+  void SendJsonTo(const std::shared_ptr<ClientConn>& conn, const Json& msg);
+  void SendTo(const std::shared_ptr<ClientConn>& conn, const std::string& msg);
 
-  std::string socket_path_;
+  std::string address_;
   TaskRunner* runner_;
-  int listen_fd_ = -1;
+  UnixSocketRaw listen_socket_;
+  SockFamily family_ = SockFamily::kUnspec;
   std::atomic<bool> running_{false};
   std::thread accept_thread_;
 
@@ -103,8 +113,7 @@ class IpcClient {
   using NotifyCallback =
       std::function<void(const std::string& method, const Json& params)>;
 
-  explicit IpcClient(const std::string& socket_path,
-                     TaskRunner* runner = nullptr);
+  explicit IpcClient(const std::string& address, TaskRunner* runner = nullptr);
   ~IpcClient();
 
   bool Connect();
@@ -113,8 +122,8 @@ class IpcClient {
 
   // Synchronous JSON-RPC 2.0 call with timeout
   Result<Json> Call(const std::string& method,
-                   const Json& params = Json::object(),
-                   uint32_t timeout_ms = 5000);
+                    const Json& params = Json::object(),
+                    uint32_t timeout_ms = 5000);
 
   // Async JSON-RPC 2.0 call
   void CallAsync(const std::string& method, const Json& params,
@@ -137,11 +146,14 @@ class IpcClient {
 
   void ReadLoop();
   void HandleMessage(const std::string& line);
+  bool SendJson(const Json& msg);
   bool SendRaw(const std::string& data);
 
-  std::string socket_path_;
+  std::string address_;
   TaskRunner* runner_;
-  int fd_ = -1;
+  UnixSocketRaw socket_;
+  SockFamily family_ = SockFamily::kUnspec;
+  std::mutex send_mu_;
   std::atomic<bool> connected_{false};
   std::thread read_thread_;
 

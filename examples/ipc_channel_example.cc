@@ -16,9 +16,11 @@ using namespace xtils;
 using namespace std::chrono_literals;
 
 int main() {
-  const std::string socket_path = "/tmp/xtils_ipc_example.sock";
+  // Use "/tmp/xtils_ipc_example.sock" for filesystem Unix sockets.
+  // Other supported forms: "@xtils_ipc", "127.0.0.1:9000", "[::1]:9000".
+  const std::string address = "/tmp/xtils_ipc_example.sock";
 
-  IpcServer server(socket_path);
+  IpcServer server(address);
   server.Register("add", [](const Json& params) -> Result<Json> {
     auto a = params.get_integer("a");
     auto b = params.get_integer("b");
@@ -38,7 +40,7 @@ int main() {
     return 1;
   }
 
-  IpcClient client(socket_path);
+  IpcClient client(address);
   if (!client.Connect()) {
     printf("failed to connect IPC client\n");
     return 1;

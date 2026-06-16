@@ -21,7 +21,7 @@ xtils/
 │   │   ├── udp_client.h / udp_server.h
 │   │   ├── websocket_client.h
 │   │   ├── websocket_common.h
-│   │   └── ipc_channel.h       # JSON-RPC 2.0 IPC over Unix sockets
+│   │   └── ipc_channel.h       # JSON-RPC 2.0 over stream sockets
 │   ├── scripting/          # Embedded JS engine (opt-in, QuickJS-NG)
 │   │   ├── engine.h        # ScriptEngine — runtime management
 │   │   ├── context.h       # ScriptContext — eval, function registration

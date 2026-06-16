@@ -1,23 +1,31 @@
 #include "xtils/net/ipc_channel.h"
 
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <unistd.h>
 
-#include <algorithm>
-#include <cerrno>
-#include <cstring>
+#include <chrono>
+#include <utility>
 
 namespace xtils {
 
 static const char* kJsonRpcVersion = "2.0";
+static constexpr uint32_t kIpcIoTimeoutMs = 5000;
+
+namespace {
+
+bool ShouldUnlinkAddress(SockFamily family, const std::string& address) {
+  return family == SockFamily::kUnix && !address.empty() && address[0] != '@';
+}
+
+}  // namespace
 
 // =============================================================================
 // IpcServer
 // =============================================================================
 
-IpcServer::IpcServer(const std::string& socket_path, TaskRunner* runner)
-    : socket_path_(socket_path), runner_(runner) {}
+IpcServer::IpcServer(const std::string& address, TaskRunner* runner)
+    : address_(address),
+      runner_(runner),
+      family_(GetSockFamily(address.c_str())) {}
 
 IpcServer::~IpcServer() { Stop(); }
 
@@ -32,25 +40,17 @@ void IpcServer::OnNotify(const std::string& method, NotifyHandler handler) {
 }
 
 bool IpcServer::Start() {
-  ::unlink(socket_path_.c_str());
+  if (running_) return true;
+  if (family_ == SockFamily::kUnspec) return false;
 
-  listen_fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
-  if (listen_fd_ < 0) return false;
+  if (ShouldUnlinkAddress(family_, address_)) ::unlink(address_.c_str());
 
-  struct sockaddr_un addr {};
-  addr.sun_family = AF_UNIX;
-  std::strncpy(addr.sun_path, socket_path_.c_str(), sizeof(addr.sun_path) - 1);
+  listen_socket_ = UnixSocketRaw::CreateMayFail(family_, SockType::kStream);
+  if (!listen_socket_) return false;
 
-  if (::bind(listen_fd_, reinterpret_cast<struct sockaddr*>(&addr),
-             sizeof(addr)) < 0) {
-    ::close(listen_fd_);
-    listen_fd_ = -1;
-    return false;
-  }
-
-  if (::listen(listen_fd_, 8) < 0) {
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+  if (!listen_socket_.Bind(address_) || !listen_socket_.Listen()) {
+    listen_socket_.Shutdown();
+    if (ShouldUnlinkAddress(family_, address_)) ::unlink(address_.c_str());
     return false;
   }
 
@@ -62,11 +62,7 @@ bool IpcServer::Start() {
 void IpcServer::Stop() {
   if (!running_.exchange(false)) return;
 
-  if (listen_fd_ >= 0) {
-    ::shutdown(listen_fd_, SHUT_RDWR);
-    ::close(listen_fd_);
-    listen_fd_ = -1;
-  }
+  if (listen_socket_) listen_socket_.Shutdown();
 
   if (accept_thread_.joinable()) accept_thread_.join();
 
@@ -76,22 +72,21 @@ void IpcServer::Stop() {
     conns = std::move(clients_);
   }
   for (auto& c : conns) {
-    if (c->fd >= 0) {
-      ::shutdown(c->fd, SHUT_RDWR);
-      ::close(c->fd);
-      c->fd = -1;
+    {
+      std::lock_guard<std::mutex> lock(c->write_mu);
+      if (c->socket) c->socket.Shutdown();
     }
     if (c->read_thread.joinable()) c->read_thread.join();
   }
 
-  ::unlink(socket_path_.c_str());
+  if (ShouldUnlinkAddress(family_, address_)) ::unlink(address_.c_str());
 }
 
 size_t IpcServer::ClientCount() const {
   std::lock_guard<std::mutex> lock(clients_mu_);
   size_t count = 0;
   for (auto& c : clients_) {
-    if (c->fd >= 0) ++count;
+    if (c->socket) ++count;
   }
   return count;
 }
@@ -101,36 +96,41 @@ void IpcServer::Notify(const std::string& method, const Json& params) {
   msg["jsonrpc"] = Json(std::string(kJsonRpcVersion));
   msg["method"] = Json(method);
   msg["params"] = params;
-  std::string line = msg.dump() + "\n";
-
-  std::lock_guard<std::mutex> lock(clients_mu_);
-  for (auto& c : clients_) {
-    SendTo(c->fd, line);
+  std::vector<std::shared_ptr<ClientConn>> conns;
+  {
+    std::lock_guard<std::mutex> lock(clients_mu_);
+    conns = clients_;
+  }
+  for (auto& c : conns) {
+    SendJsonTo(c, msg);
   }
 }
 
 void IpcServer::AcceptLoop() {
   while (running_) {
-    int client_fd = ::accept(listen_fd_, nullptr, nullptr);
-    if (client_fd < 0) break;
+    UnixSocketRaw client_socket = listen_socket_.Accept();
+    if (!client_socket) {
+      if (running_) break;
+      continue;
+    }
 
     auto conn = std::make_shared<ClientConn>();
-    conn->fd = client_fd;
+    conn->socket = std::move(client_socket);
+    conn->socket.SetTxTimeout(kIpcIoTimeoutMs);
 
     {
       std::lock_guard<std::mutex> lock(clients_mu_);
       clients_.push_back(conn);
     }
 
-    conn->read_thread =
-        std::thread(&IpcServer::ClientReadLoop, this, conn);
+    conn->read_thread = std::thread(&IpcServer::ClientReadLoop, this, conn);
   }
 }
 
 void IpcServer::ClientReadLoop(std::shared_ptr<ClientConn> conn) {
   char buf[4096];
-  while (running_ && conn->fd >= 0) {
-    ssize_t n = ::recv(conn->fd, buf, sizeof(buf), 0);
+  while (running_ && conn->socket) {
+    ssize_t n = conn->socket.Receive(buf, sizeof(buf));
     if (n <= 0) break;
 
     conn->read_buf.append(buf, static_cast<size_t>(n));
@@ -144,13 +144,12 @@ void IpcServer::ClientReadLoop(std::shared_ptr<ClientConn> conn) {
       }
     }
   }
-  // Mark as disconnected; cleanup in Stop()
-  if (conn->fd >= 0) {
-    ::close(conn->fd);
-    conn->fd = -1;
+
+  {
+    std::lock_guard<std::mutex> lock(conn->write_mu);
+    if (conn->socket) conn->socket.Shutdown();
   }
 }
-
 
 void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
                               const std::string& line) {
@@ -164,7 +163,7 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
     err_obj["code"] = Json(static_cast<int64_t>(jsonrpc::kParseError));
     err_obj["message"] = Json(std::string("Parse error"));
     response["error"] = std::move(err_obj);
-    SendTo(conn->fd, response.dump() + "\n");
+    SendJsonTo(conn, response);
     return;
   }
 
@@ -184,7 +183,7 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
     err_obj["code"] = Json(static_cast<int64_t>(jsonrpc::kInvalidRequest));
     err_obj["message"] = Json(std::string("Invalid Request"));
     response["error"] = std::move(err_obj);
-    SendTo(conn->fd, response.dump() + "\n");
+    SendJsonTo(conn, response);
     return;
   }
 
@@ -236,40 +235,48 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
     response["error"] = std::move(err_obj);
   }
 
-  SendTo(conn->fd, response.dump() + "\n");
+  SendJsonTo(conn, response);
 }
 
-void IpcServer::SendTo(int fd, const std::string& msg) {
-  size_t total = 0;
-  while (total < msg.size()) {
-    ssize_t n =
-        ::send(fd, msg.data() + total, msg.size() - total, MSG_NOSIGNAL);
-    if (n <= 0) break;
-    total += static_cast<size_t>(n);
-  }
+void IpcServer::SendJsonTo(const std::shared_ptr<ClientConn>& conn,
+                           const Json& msg) {
+  std::string line = msg.dump();
+  line.push_back('\n');
+  SendTo(conn, line);
+}
+
+void IpcServer::SendTo(const std::shared_ptr<ClientConn>& conn,
+                       const std::string& msg) {
+  if (!conn) return;
+
+  std::lock_guard<std::mutex> lock(conn->write_mu);
+  if (!conn->socket) return;
+
+  ssize_t n = conn->socket.Send(msg.data(), msg.size());
+  if (n != static_cast<ssize_t>(msg.size())) return;
 }
 
 // =============================================================================
 // IpcClient
 // =============================================================================
 
-IpcClient::IpcClient(const std::string& socket_path, TaskRunner* runner)
-    : socket_path_(socket_path), runner_(runner) {}
+IpcClient::IpcClient(const std::string& address, TaskRunner* runner)
+    : address_(address),
+      runner_(runner),
+      family_(GetSockFamily(address.c_str())) {}
 
 IpcClient::~IpcClient() { Disconnect(); }
 
 bool IpcClient::Connect() {
-  fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
-  if (fd_ < 0) return false;
+  if (connected_) return true;
+  if (family_ == SockFamily::kUnspec) return false;
 
-  struct sockaddr_un addr {};
-  addr.sun_family = AF_UNIX;
-  std::strncpy(addr.sun_path, socket_path_.c_str(), sizeof(addr.sun_path) - 1);
+  socket_ = UnixSocketRaw::CreateMayFail(family_, SockType::kStream);
+  if (!socket_) return false;
+  socket_.SetTxTimeout(kIpcIoTimeoutMs);
 
-  if (::connect(fd_, reinterpret_cast<struct sockaddr*>(&addr),
-                sizeof(addr)) < 0) {
-    ::close(fd_);
-    fd_ = -1;
+  if (!socket_.Connect(address_)) {
+    socket_.Shutdown();
     return false;
   }
 
@@ -279,19 +286,19 @@ bool IpcClient::Connect() {
 }
 
 void IpcClient::Disconnect() {
-  if (!connected_.exchange(false)) return;
+  connected_ = false;
 
-  if (fd_ >= 0) {
-    ::shutdown(fd_, SHUT_RDWR);
-    ::close(fd_);
-    fd_ = -1;
+  {
+    std::lock_guard<std::mutex> lock(send_mu_);
+    if (socket_) socket_.Shutdown();
   }
 
   if (read_thread_.joinable()) read_thread_.join();
 
   std::lock_guard<std::mutex> lock(pending_mu_);
   for (auto& [id, call] : pending_calls_) {
-    std::lock_guard<std::mutex> cl(call->mu);
+    (void)id;
+    std::lock_guard<std::mutex> call_lock(call->mu);
     if (!call->done) {
       call->result = Err("disconnected");
       call->done = true;
@@ -304,7 +311,7 @@ void IpcClient::Disconnect() {
 bool IpcClient::IsConnected() const { return connected_; }
 
 Result<Json> IpcClient::Call(const std::string& method, const Json& params,
-                            uint32_t timeout_ms) {
+                             uint32_t timeout_ms) {
   if (!connected_) return Err("not connected");
 
   uint64_t id = next_id_++;
@@ -320,7 +327,7 @@ Result<Json> IpcClient::Call(const std::string& method, const Json& params,
     pending_calls_[id] = pending;
   }
 
-  if (!SendRaw(msg.dump() + "\n")) {
+  if (!SendJson(msg)) {
     std::lock_guard<std::mutex> lock(pending_mu_);
     pending_calls_.erase(id);
     return Err("send failed");
@@ -329,12 +336,15 @@ Result<Json> IpcClient::Call(const std::string& method, const Json& params,
   std::unique_lock<std::mutex> lock(pending->mu);
   if (!pending->cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
                             [&] { return pending->done; })) {
+    lock.unlock();
     std::lock_guard<std::mutex> plock(pending_mu_);
     pending_calls_.erase(id);
     return Err("timeout");
   }
 
-  return std::move(pending->result);
+  Result<Json> result = std::move(pending->result);
+  lock.unlock();
+  return result;
 }
 
 void IpcClient::CallAsync(const std::string& method, const Json& params,
@@ -357,22 +367,19 @@ void IpcClient::CallAsync(const std::string& method, const Json& params,
     pending_calls_[id] = pending;
   }
 
-  if (!SendRaw(msg.dump() + "\n")) {
+  if (!SendJson(msg)) {
     std::lock_guard<std::mutex> lock(pending_mu_);
     pending_calls_.erase(id);
     if (callback) callback(Err("send failed"));
     return;
   }
 
-  std::thread([pending, callback, id, this]() {
+  std::thread([pending, callback]() {
     std::unique_lock<std::mutex> lock(pending->mu);
     pending->cv.wait(lock, [&] { return pending->done; });
+    Result<Json> result = std::move(pending->result);
     lock.unlock();
-    {
-      std::lock_guard<std::mutex> plock(pending_mu_);
-      pending_calls_.erase(id);
-    }
-    if (callback) callback(std::move(pending->result));
+    if (callback) callback(std::move(result));
   }).detach();
 }
 
@@ -385,11 +392,10 @@ bool IpcClient::Notify(const std::string& method, const Json& params) {
   msg["params"] = params;
   // No "id" field — this is a notification per JSON-RPC 2.0
 
-  return SendRaw(msg.dump() + "\n");
+  return SendJson(msg);
 }
 
-Subscription IpcClient::OnNotify(const std::string& method,
-                                 NotifyCallback cb) {
+Subscription IpcClient::OnNotify(const std::string& method, NotifyCallback cb) {
   std::lock_guard<std::mutex> lock(notify_signals_mu_);
   return named_notify_signals_[method].Connect(std::move(cb));
 }
@@ -398,22 +404,25 @@ Subscription IpcClient::OnNotify(NotifyCallback cb) {
   return notify_signal_.Connect(std::move(cb));
 }
 
+bool IpcClient::SendJson(const Json& msg) {
+  std::string line = msg.dump();
+  line.push_back('\n');
+  return SendRaw(line);
+}
+
 bool IpcClient::SendRaw(const std::string& data) {
-  size_t total = 0;
-  while (total < data.size()) {
-    ssize_t n =
-        ::send(fd_, data.data() + total, data.size() - total, MSG_NOSIGNAL);
-    if (n <= 0) return false;
-    total += static_cast<size_t>(n);
-  }
-  return true;
+  std::lock_guard<std::mutex> lock(send_mu_);
+  if (!socket_) return false;
+
+  ssize_t n = socket_.Send(data.data(), data.size());
+  return n == static_cast<ssize_t>(data.size());
 }
 
 void IpcClient::ReadLoop() {
   std::string read_buf;
   char buf[4096];
-  while (connected_ && fd_ >= 0) {
-    ssize_t n = ::recv(fd_, buf, sizeof(buf), 0);
+  while (connected_ && socket_) {
+    ssize_t n = socket_.Receive(buf, sizeof(buf));
     if (n <= 0) {
       connected_ = false;
       break;
@@ -434,13 +443,15 @@ void IpcClient::ReadLoop() {
   // Wake all pending calls on disconnect
   std::lock_guard<std::mutex> lock(pending_mu_);
   for (auto& [id, call] : pending_calls_) {
-    std::lock_guard<std::mutex> cl(call->mu);
+    (void)id;
+    std::lock_guard<std::mutex> call_lock(call->mu);
     if (!call->done) {
       call->result = Err("disconnected");
       call->done = true;
       call->cv.notify_all();
     }
   }
+  pending_calls_.clear();
 }
 
 void IpcClient::HandleMessage(const std::string& line) {
@@ -477,13 +488,13 @@ void IpcClient::HandleMessage(const std::string& line) {
     auto it = pending_calls_.find(id);
     if (it == pending_calls_.end()) return;
     pending = it->second;
+    pending_calls_.erase(it);
   }
 
   std::lock_guard<std::mutex> lock(pending->mu);
   auto err_ptr = msg->find("error");
   if (err_ptr && err_ptr->is_object()) {
-    int code =
-        static_cast<int>(err_ptr->get_integer("code").value_or(-1));
+    int code = static_cast<int>(err_ptr->get_integer("code").value_or(-1));
     std::string message =
         err_ptr->get_string("message").value_or("unknown error");
     pending->result = Err(code, message);

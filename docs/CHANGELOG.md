@@ -7,6 +7,11 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
+### 2026-06 — IPC Transport
+
+- **fix(ipc)**: make `IpcServer`/`IpcClient` reuse `UnixSocketRaw` and support stream addresses beyond filesystem Unix sockets, including abstract Unix sockets and TCP IPv4/IPv6.
+- **fix(ipc)**: wake pending calls and join the read thread reliably when the peer disconnects before `IpcClient::Disconnect()`.
+
 ### 2026-06 — Net API Cleanup & Examples
 
 - **refactor(net)!**: move HTTP client public types under `HttpClient` (`HttpClient::Request`, `HttpClient::Response`, `HttpClient::Listener`, `HttpClient::MultipartField`, `HttpClient::MultipartFile`) and rename the generic synchronous request entry point to `HttpClient::Send()`.

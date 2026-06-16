@@ -93,7 +93,7 @@ inline int MkSockType(SockType type) {
 SockaddrAny MakeSockAddr(SockFamily family, const std::string& socket_name) {
   switch (family) {
     case SockFamily::kUnix: {
-      struct sockaddr_un saddr{};
+      struct sockaddr_un saddr {};
       const size_t name_len = socket_name.size();
       if (name_len + 1 /* for trailing \0 */ >= sizeof(saddr.sun_path)) {
         errno = ENAMETOOLONG;
@@ -118,7 +118,7 @@ SockaddrAny MakeSockAddr(SockFamily family, const std::string& socket_name) {
       auto parts = SplitString(socket_name, ":");
       // XTILS_CHECK(parts.size() == 2);
       struct addrinfo* addr_info = nullptr;
-      struct addrinfo hints{};
+      struct addrinfo hints {};
       hints.ai_family = AF_INET;
       int ret =
           getaddrinfo(parts[0].c_str(), parts[1].c_str(), &hints, &addr_info);
@@ -139,7 +139,7 @@ SockaddrAny MakeSockAddr(SockFamily family, const std::string& socket_name) {
       auto port = SplitString(parts[1], ":");
       // XTILS_CHECK(port.size() == 1);
       struct addrinfo* addr_info = nullptr;
-      struct addrinfo hints{};
+      struct addrinfo hints {};
       hints.ai_family = AF_INET6;
       int ret =
           getaddrinfo(address[0].c_str(), port[0].c_str(), &hints, &addr_info);
@@ -237,7 +237,8 @@ UnixSocketRaw::UnixSocketRaw(ScopedSocketHandle fd, SockFamily family,
     // The reinterpret_cast<const char*> is needed for Windows, where the 4th
     // arg is a const char* (on other POSIX system is a const void*).
     XTILS_CHECK(!setsockopt(*fd_, SOL_SOCKET, SO_REUSEADDR,
-                      reinterpret_cast<const char*>(&flag), sizeof(flag)));
+                            reinterpret_cast<const char*>(&flag),
+                            sizeof(flag)));
     // Disable Nagle's algorithm, optimize for low-latency.
     // See https://github.com/google/perfetto/issues/70.
     setsockopt(*fd_, IPPROTO_TCP, TCP_NODELAY,
@@ -299,20 +300,58 @@ bool UnixSocketRaw::Listen() {
   return listen(*fd_, SOMAXCONN) == 0;
 }
 
+UnixSocketRaw UnixSocketRaw::Accept() {
+  // XTILS_DCHECK(fd_);
+  int client_fd = accept(*fd_, nullptr, nullptr);
+  if (client_fd < 0) return UnixSocketRaw();
+  return UnixSocketRaw(ScopedSocketHandle(client_fd), family_, type_);
+}
+
 bool UnixSocketRaw::Connect(const std::string& socket_name) {
   // XTILS_DCHECK(fd_);
   SockaddrAny addr = MakeSockAddr(family_, socket_name);
   if (addr.size == 0) return false;
 
-  int res = connect(*fd_, addr.addr(), addr.size);
-  bool continue_async = errno == EINPROGRESS;
-  bool is_blocking_call = false;
-  if (is_blocking_call && res < 0 && continue_async) {
+  if (tx_timeout_ms_ > 0) {
+    int flags = fcntl(*fd_, F_GETFL, 0);
+    if (flags < 0) return false;
+    const bool was_blocking = (flags & O_NONBLOCK) == 0;
+    if (was_blocking && fcntl(*fd_, F_SETFL, flags | O_NONBLOCK) != 0) {
+      return false;
+    }
+
+    int res = connect(*fd_, addr.addr(), addr.size);
+    if (res == 0) {
+      if (was_blocking) fcntl(*fd_, F_SETFL, flags);
+      return true;
+    }
+    if (errno != EINPROGRESS) {
+      if (was_blocking) fcntl(*fd_, F_SETFL, flags);
+      return false;
+    }
+
+    const int timeout_ms = tx_timeout_ms_ > 0x7fffffffU
+                               ? 0x7fffffff
+                               : static_cast<int>(tx_timeout_ms_);
     pollfd pfd{*fd_, POLLOUT, 0};
-    if (poll(&pfd, 1 /*nfds*/, 3000 /*timeout*/) <= 0) return false;
-    return (pfd.revents & POLLOUT) != 0;
+    res = poll(&pfd, 1, timeout_ms);
+    if (was_blocking) fcntl(*fd_, F_SETFL, flags);
+    if (res <= 0 || !(pfd.revents & POLLOUT)) return false;
+
+    int so_error = 0;
+    socklen_t so_error_len = sizeof(so_error);
+    if (getsockopt(*fd_, SOL_SOCKET, SO_ERROR, &so_error, &so_error_len) != 0) {
+      return false;
+    }
+    if (so_error != 0) {
+      errno = so_error;
+      return false;
+    }
+    return true;
   }
-  if (res && !continue_async) return false;
+
+  int res = connect(*fd_, addr.addr(), addr.size);
+  if (res != 0 && errno != EINPROGRESS) return false;
 
   return true;
 }
@@ -462,7 +501,7 @@ bool UnixSocketRaw::SetTxTimeout(uint32_t timeout_ms) {
   // See SendMsgAllPosix(). We still make the setsockopt call because
   // SO_SNDTIMEO also affects connect().
   tx_timeout_ms_ = timeout_ms;
-  struct timeval timeout{};
+  struct timeval timeout {};
   uint32_t timeout_sec = timeout_ms / 1000;
   timeout.tv_sec = static_cast<decltype(timeout.tv_sec)>(timeout_sec);
   timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>(
@@ -475,7 +514,7 @@ bool UnixSocketRaw::SetTxTimeout(uint32_t timeout_ms) {
 
 bool UnixSocketRaw::SetRxTimeout(uint32_t timeout_ms) {
   XTILS_DCHECK(fd_);
-  struct timeval timeout{};
+  struct timeval timeout {};
   uint32_t timeout_sec = timeout_ms / 1000;
   timeout.tv_sec = static_cast<decltype(timeout.tv_sec)>(timeout_sec);
   timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>(
@@ -486,7 +525,7 @@ bool UnixSocketRaw::SetRxTimeout(uint32_t timeout_ms) {
 }
 
 std::string UnixSocketRaw::GetSockAddr() const {
-  struct sockaddr_storage stg{};
+  struct sockaddr_storage stg {};
   socklen_t slen = sizeof(stg);
   int ret = getsockname(*fd_, reinterpret_cast<struct sockaddr*>(&stg), &slen);
   if (ret < 0) {

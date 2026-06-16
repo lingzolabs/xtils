@@ -11,6 +11,16 @@ using namespace xtils;
 
 static const std::string kTestSocket = "/tmp/xtils_ipc_test.sock";
 
+static uint16_t FindTcpPort(uint16_t base_port) {
+  for (uint16_t port = base_port; port < base_port + 100; ++port) {
+    auto socket =
+        UnixSocketRaw::CreateMayFail(SockFamily::kInet, SockType::kStream);
+    if (!socket) continue;
+    if (socket.Bind("127.0.0.1:" + std::to_string(port))) return port;
+  }
+  return 0;
+}
+
 class IpcFixture {
  public:
   IpcFixture() : server_(kTestSocket), client_(kTestSocket) {}
@@ -116,8 +126,8 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: server notification to client") {
   std::string got_method;
   std::string got_data;
 
-  auto sub = client_.OnNotify("status_update",
-      [&](const std::string& method, const Json& params) {
+  auto sub = client_.OnNotify(
+      "status_update", [&](const std::string& method, const Json& params) {
         received = true;
         got_method = method;
         got_data = params.get_string("status").value_or("");
@@ -137,8 +147,8 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: global notification handler") {
   StartAndConnect();
 
   std::atomic<int> count{0};
-  auto sub = client_.OnNotify(
-      [&](const std::string& method, const Json& params) {
+  auto sub =
+      client_.OnNotify([&](const std::string& method, const Json& params) {
         (void)params;
         (void)method;
         ++count;
@@ -152,9 +162,8 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: global notification handler") {
 }
 
 TEST_CASE_FIXTURE(IpcFixture, "IPC: multiple clients") {
-  server_.Register("echo", [](const Json& params) -> Result<Json> {
-    return params;
-  });
+  server_.Register("echo",
+                   [](const Json& params) -> Result<Json> { return params; });
 
   REQUIRE(server_.Start());
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -215,4 +224,31 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: call timeout") {
   auto result = client_.Call("hang", Json::object(), 50);
   CHECK(!result.ok());
   CHECK(result.error().message == "timeout");
+}
+
+TEST_CASE("IPC: JSON-RPC over TCP") {
+  uint16_t port = FindTcpPort(19600);
+  REQUIRE(port != 0);
+  std::string address = "127.0.0.1:" + std::to_string(port);
+
+  IpcServer server(address);
+  IpcClient client(address);
+
+  server.Register("echo",
+                  [](const Json& params) -> Result<Json> { return params; });
+
+  REQUIRE(server.Start());
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  REQUIRE(client.Connect());
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+  Json params = Json::object();
+  params["transport"] = Json(std::string("tcp"));
+
+  auto result = client.Call("echo", params);
+  REQUIRE(result.ok());
+  CHECK(result->get_string("transport").value_or("") == "tcp");
+
+  client.Disconnect();
+  server.Stop();
 }

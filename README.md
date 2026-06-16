@@ -144,7 +144,7 @@ std::string output = obj.dump(2);  // Pretty-print with 2-space indent
 | **Net / HTTP** | HTTP Server (router, CORS, WebSocket upgrade, file streaming), HTTP Client (sync/async, multipart, redirect, cookies, SSL) |
 | **Net / WebSocket** | WebSocket Client with auto-reconnect and ping/pong |
 | **Net / TCP & UDP** | TCP Client/Server, UDP Client/Server with multicast support |
-| **Net / IPC** | Unix domain socket IPC channel with length-prefixed framing |
+| **Net / IPC** | Newline-delimited JSON-RPC 2.0 over stream sockets (Unix domain sockets, abstract Unix sockets, TCP IPv4/IPv6) |
 | **Net / TLS** | OpenSSL and mbedTLS backends |
 | **FSM** | Finite State Machine with history tracking |
 | **Tasks** | TaskRunner (event loop), ThreadTaskRunner, CronScheduler, Timer, TaskGroup, Event |
