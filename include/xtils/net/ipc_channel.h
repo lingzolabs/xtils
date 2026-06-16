@@ -142,10 +142,16 @@ class IpcClient {
     std::condition_variable cv;
     bool done = false;
     Result<Json> result = Err("timeout");
+    std::function<void(Result<Json>)> callback;
   };
 
   void ReadLoop();
   void HandleMessage(const std::string& line);
+  void CompletePending(std::shared_ptr<PendingCall> pending,
+                       Result<Json> result);
+  void FailPendingCalls(const char* message);
+  void DispatchCallback(std::function<void(Result<Json>)> callback,
+                        Result<Json> result);
   bool SendJson(const Json& msg);
   bool SendRaw(const std::string& data);
 

@@ -628,7 +628,7 @@ Subscription sub = client.OnNotify("broadcast", [](auto method, auto params) {})
 client.Disconnect();
 ```
 
-Wire format is newline-delimited JSON-RPC 2.0. Requests include `jsonrpc`, `id`, `method`, and optional `params`; notifications omit `id` and do not receive a response. The same API works over filesystem Unix sockets, Linux abstract Unix sockets, TCP IPv4, and TCP IPv6 addresses.
+Wire format is newline-delimited JSON-RPC 2.0. Requests include `jsonrpc`, `id`, `method`, and optional `params`; notifications omit `id` and do not receive a response. The same API works over filesystem Unix sockets, Linux abstract Unix sockets, TCP IPv4, and TCP IPv6 addresses. `CallAsync()` does not create a per-call waiter thread; completions are driven by the IPC read loop and callbacks are posted to the constructor `TaskRunner` when one is provided, otherwise to a shared sequential callback `TaskGroup`.
 
 ### Multipart Parser
 

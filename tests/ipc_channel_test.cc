@@ -1,8 +1,11 @@
 #include "xtils/net/ipc_channel.h"
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
@@ -10,6 +13,44 @@
 using namespace xtils;
 
 static const std::string kTestSocket = "/tmp/xtils_ipc_test.sock";
+
+class QueuedTaskRunner : public TaskRunner {
+ public:
+  void PostTask(std::function<void()> task) override {
+    std::lock_guard<std::mutex> lock(mu_);
+    tasks_.push_back(std::move(task));
+    cv_.notify_all();
+  }
+
+  void PostDelayedTask(std::function<void()> task, uint32_t delay_ms) override {
+    (void)delay_ms;
+    PostTask(std::move(task));
+  }
+
+  void AddFileDescriptorWatch(PlatformHandle, std::function<void()>) override {}
+  void RemoveFileDescriptorWatch(PlatformHandle) override {}
+  bool RunsTasksOnCurrentThread() const override { return false; }
+
+  bool WaitForTask(uint32_t timeout_ms = 1000) {
+    std::unique_lock<std::mutex> lock(mu_);
+    return cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                        [&] { return !tasks_.empty(); });
+  }
+
+  void RunPending() {
+    std::vector<std::function<void()>> tasks;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      tasks.swap(tasks_);
+    }
+    for (auto& task : tasks) task();
+  }
+
+ private:
+  std::mutex mu_;
+  std::condition_variable cv_;
+  std::vector<std::function<void()>> tasks_;
+};
 
 static uint16_t FindTcpPort(uint16_t base_port) {
   for (uint16_t port = base_port; port < base_port + 100; ++port) {
@@ -210,6 +251,34 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: async call") {
 
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   CHECK(got_result);
+}
+
+TEST_CASE_FIXTURE(IpcFixture, "IPC: async callback uses TaskRunner") {
+  server_.Register("echo",
+                   [](const Json& params) -> Result<Json> { return params; });
+  REQUIRE(server_.Start());
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+  QueuedTaskRunner runner;
+  IpcClient client(kTestSocket, &runner);
+  REQUIRE(client.Connect());
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+  std::atomic<bool> got_result{false};
+  Json params = Json::object();
+  params["value"] = Json(std::string("queued"));
+  client.CallAsync("echo", params, [&](Result<Json> r) {
+    CHECK(r.ok());
+    CHECK(r->get_string("value").value_or("") == "queued");
+    got_result = true;
+  });
+
+  REQUIRE(runner.WaitForTask());
+  CHECK(!got_result);
+  runner.RunPending();
+  CHECK(got_result);
+
+  client.Disconnect();
 }
 
 TEST_CASE_FIXTURE(IpcFixture, "IPC: call timeout") {

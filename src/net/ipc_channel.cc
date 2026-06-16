@@ -5,6 +5,8 @@
 #include <chrono>
 #include <utility>
 
+#include "xtils/tasks/task_group.h"
+
 namespace xtils {
 
 static const char* kJsonRpcVersion = "2.0";
@@ -14,6 +16,11 @@ namespace {
 
 bool ShouldUnlinkAddress(SockFamily family, const std::string& address) {
   return family == SockFamily::kUnix && !address.empty() && address[0] != '@';
+}
+
+TaskGroup* IpcCallbackGroup() {
+  static auto group = TaskGroup::Sequential();
+  return group.get();
 }
 
 }  // namespace
@@ -295,17 +302,7 @@ void IpcClient::Disconnect() {
 
   if (read_thread_.joinable()) read_thread_.join();
 
-  std::lock_guard<std::mutex> lock(pending_mu_);
-  for (auto& [id, call] : pending_calls_) {
-    (void)id;
-    std::lock_guard<std::mutex> call_lock(call->mu);
-    if (!call->done) {
-      call->result = Err("disconnected");
-      call->done = true;
-      call->cv.notify_all();
-    }
-  }
-  pending_calls_.clear();
+  FailPendingCalls("disconnected");
 }
 
 bool IpcClient::IsConnected() const { return connected_; }
@@ -350,7 +347,7 @@ Result<Json> IpcClient::Call(const std::string& method, const Json& params,
 void IpcClient::CallAsync(const std::string& method, const Json& params,
                           std::function<void(Result<Json>)> callback) {
   if (!connected_) {
-    if (callback) callback(Err("not connected"));
+    DispatchCallback(std::move(callback), Err("not connected"));
     return;
   }
 
@@ -362,25 +359,20 @@ void IpcClient::CallAsync(const std::string& method, const Json& params,
   msg["params"] = params;
 
   auto pending = std::make_shared<PendingCall>();
+  pending->callback = std::move(callback);
   {
     std::lock_guard<std::mutex> lock(pending_mu_);
     pending_calls_[id] = pending;
   }
 
   if (!SendJson(msg)) {
-    std::lock_guard<std::mutex> lock(pending_mu_);
-    pending_calls_.erase(id);
-    if (callback) callback(Err("send failed"));
+    {
+      std::lock_guard<std::mutex> lock(pending_mu_);
+      pending_calls_.erase(id);
+    }
+    CompletePending(pending, Err("send failed"));
     return;
   }
-
-  std::thread([pending, callback]() {
-    std::unique_lock<std::mutex> lock(pending->mu);
-    pending->cv.wait(lock, [&] { return pending->done; });
-    Result<Json> result = std::move(pending->result);
-    lock.unlock();
-    if (callback) callback(std::move(result));
-  }).detach();
 }
 
 bool IpcClient::Notify(const std::string& method, const Json& params) {
@@ -402,6 +394,57 @@ Subscription IpcClient::OnNotify(const std::string& method, NotifyCallback cb) {
 
 Subscription IpcClient::OnNotify(NotifyCallback cb) {
   return notify_signal_.Connect(std::move(cb));
+}
+
+void IpcClient::CompletePending(std::shared_ptr<PendingCall> pending,
+                                Result<Json> result) {
+  if (!pending) return;
+
+  std::function<void(Result<Json>)> callback;
+  {
+    std::lock_guard<std::mutex> lock(pending->mu);
+    if (pending->done) return;
+    callback = std::move(pending->callback);
+    if (!callback) pending->result = std::move(result);
+    pending->done = true;
+  }
+  pending->cv.notify_all();
+
+  if (callback) DispatchCallback(std::move(callback), std::move(result));
+}
+
+void IpcClient::FailPendingCalls(const char* message) {
+  std::vector<std::shared_ptr<PendingCall>> pending_calls;
+  {
+    std::lock_guard<std::mutex> lock(pending_mu_);
+    for (auto& [id, call] : pending_calls_) {
+      (void)id;
+      pending_calls.push_back(call);
+    }
+    pending_calls_.clear();
+  }
+
+  for (auto& call : pending_calls) {
+    CompletePending(call, Err(message));
+  }
+}
+
+void IpcClient::DispatchCallback(std::function<void(Result<Json>)> callback,
+                                 Result<Json> result) {
+  if (!callback) return;
+
+  if (runner_) {
+    runner_->PostTask(
+        [callback = std::move(callback), result = std::move(result)]() mutable {
+          callback(std::move(result));
+        });
+    return;
+  }
+
+  IpcCallbackGroup()->PostAsyncTask(
+      [callback = std::move(callback), result = std::move(result)]() mutable {
+        callback(std::move(result));
+      });
 }
 
 bool IpcClient::SendJson(const Json& msg) {
@@ -440,18 +483,8 @@ void IpcClient::ReadLoop() {
     }
   }
 
-  // Wake all pending calls on disconnect
-  std::lock_guard<std::mutex> lock(pending_mu_);
-  for (auto& [id, call] : pending_calls_) {
-    (void)id;
-    std::lock_guard<std::mutex> call_lock(call->mu);
-    if (!call->done) {
-      call->result = Err("disconnected");
-      call->done = true;
-      call->cv.notify_all();
-    }
-  }
-  pending_calls_.clear();
+  // Wake all pending calls on disconnect.
+  FailPendingCalls("disconnected");
 }
 
 void IpcClient::HandleMessage(const std::string& line) {
@@ -491,23 +524,20 @@ void IpcClient::HandleMessage(const std::string& line) {
     pending_calls_.erase(it);
   }
 
-  std::lock_guard<std::mutex> lock(pending->mu);
   auto err_ptr = msg->find("error");
   if (err_ptr && err_ptr->is_object()) {
     int code = static_cast<int>(err_ptr->get_integer("code").value_or(-1));
     std::string message =
         err_ptr->get_string("message").value_or("unknown error");
-    pending->result = Err(code, message);
+    CompletePending(pending, Err(code, message));
   } else {
     auto result_ptr = msg->find("result");
     if (result_ptr) {
-      pending->result = *result_ptr;
+      CompletePending(pending, *result_ptr);
     } else {
-      pending->result = Json(nullptr);
+      CompletePending(pending, Json(nullptr));
     }
   }
-  pending->done = true;
-  pending->cv.notify_all();
 }
 
 }  // namespace xtils
