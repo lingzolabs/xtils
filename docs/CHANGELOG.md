@@ -11,7 +11,8 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 - **fix(ipc)**: make `IpcServer`/`IpcClient` reuse `UnixSocketRaw` and support stream addresses beyond filesystem Unix sockets, including abstract Unix sockets and TCP IPv4/IPv6.
 - **fix(ipc)**: wake pending calls and join the read thread reliably when the peer disconnects before `IpcClient::Disconnect()`.
-- **fix(ipc)**: remove one detached waiter thread per `IpcClient::CallAsync()`; async responses now complete from the read loop and callbacks are posted to the provided `TaskRunner`, an explicit `TaskGroup`, or a shared parallel default callback `TaskGroup`.
+- **fix(ipc)**: remove one detached waiter thread per `IpcClient::CallAsync()`; async responses now complete from the read loop and callbacks are posted to an explicit `TaskGroup` or a shared parallel default callback `TaskGroup`.
+- **refactor(ipc)!**: use `TaskGroup` as the only IPC executor API, removing direct `TaskRunner` constructors from `IpcServer`/`IpcClient`; server method and notification handlers are now dispatched through the server `TaskGroup` instead of running inline on per-client read threads.
 
 ### 2026-06 — Net API Cleanup & Examples
 

@@ -604,12 +604,14 @@ void SetVerifySSL(bool);
 
 ```cpp
 #include "xtils/net/ipc_channel.h"
+#include "xtils/tasks/task_group.h"
 
 // Address can be a Unix socket path, abstract Unix socket, TCP IPv4, or TCP IPv6:
 //   "/tmp/app.sock", "@app", "127.0.0.1:9000", "[::1]:9000"
 
 // Server side
-IpcServer server("/tmp/app.sock");
+auto handlers = TaskGroup::Parallel(4);
+IpcServer server("/tmp/app.sock", *handlers);
 server.Register("echo", [](const Json& params) -> Result<Json> {
   return params;
 });
@@ -619,10 +621,8 @@ server.Notify("broadcast", Json::object());
 server.Stop();
 
 // Client side
-IpcClient client("/tmp/app.sock");
-// Or choose an explicit async callback executor:
-// auto callbacks = TaskGroup::Parallel(4);
-// IpcClient client("/tmp/app.sock", *callbacks);
+auto callbacks = TaskGroup::Sequential();
+IpcClient client("/tmp/app.sock", *callbacks);
 client.Connect();
 Result<Json> r = client.Call("echo", Json::object(), 5000);
 client.CallAsync("echo", Json::object(), [](Result<Json> r) {});
@@ -631,7 +631,7 @@ Subscription sub = client.OnNotify("broadcast", [](auto method, auto params) {})
 client.Disconnect();
 ```
 
-Wire format is newline-delimited JSON-RPC 2.0. Requests include `jsonrpc`, `id`, `method`, and optional `params`; notifications omit `id` and do not receive a response. The same API works over filesystem Unix sockets, Linux abstract Unix sockets, TCP IPv4, and TCP IPv6 addresses. `CallAsync()` does not create a per-call waiter thread; completions are driven by the IPC read loop and callbacks are posted to the constructor `TaskRunner` when one is provided, to an explicit `TaskGroup` when constructed with one, or to a shared parallel default `TaskGroup` otherwise.
+Wire format is newline-delimited JSON-RPC 2.0. Requests include `jsonrpc`, `id`, `method`, and optional `params`; notifications omit `id` and do not receive a response. The same API works over filesystem Unix sockets, Linux abstract Unix sockets, TCP IPv4, and TCP IPv6 addresses. IPC does not expose a separate `TaskRunner` constructor; use `TaskGroup` as the executor abstraction. Server method/notification handlers are posted with `TaskGroup::PostAsyncTask()` to the server `TaskGroup`, and `CallAsync()` callbacks are posted the same way to the client `TaskGroup`. When no explicit group is supplied, IPC uses a shared parallel default `TaskGroup` with at least two workers. An explicit `TaskGroup` must outlive the corresponding `IpcServer`/`IpcClient` or be stopped after the IPC object is stopped/disconnected.
 
 ### Multipart Parser
 

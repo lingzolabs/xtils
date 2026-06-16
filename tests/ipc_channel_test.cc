@@ -1,11 +1,11 @@
 #include "xtils/net/ipc_channel.h"
 
+#include <atomic>
 #include <chrono>
-#include <condition_variable>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
-#include <vector>
 
 #include "xtils/tasks/task_group.h"
 
@@ -15,44 +15,6 @@
 using namespace xtils;
 
 static const std::string kTestSocket = "/tmp/xtils_ipc_test.sock";
-
-class QueuedTaskRunner : public TaskRunner {
- public:
-  void PostTask(std::function<void()> task) override {
-    std::lock_guard<std::mutex> lock(mu_);
-    tasks_.push_back(std::move(task));
-    cv_.notify_all();
-  }
-
-  void PostDelayedTask(std::function<void()> task, uint32_t delay_ms) override {
-    (void)delay_ms;
-    PostTask(std::move(task));
-  }
-
-  void AddFileDescriptorWatch(PlatformHandle, std::function<void()>) override {}
-  void RemoveFileDescriptorWatch(PlatformHandle) override {}
-  bool RunsTasksOnCurrentThread() const override { return false; }
-
-  bool WaitForTask(uint32_t timeout_ms = 1000) {
-    std::unique_lock<std::mutex> lock(mu_);
-    return cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-                        [&] { return !tasks_.empty(); });
-  }
-
-  void RunPending() {
-    std::vector<std::function<void()>> tasks;
-    {
-      std::lock_guard<std::mutex> lock(mu_);
-      tasks.swap(tasks_);
-    }
-    for (auto& task : tasks) task();
-  }
-
- private:
-  std::mutex mu_;
-  std::condition_variable cv_;
-  std::vector<std::function<void()>> tasks_;
-};
 
 static uint16_t FindTcpPort(uint16_t base_port) {
   for (uint16_t port = base_port; port < base_port + 100; ++port) {
@@ -255,32 +217,39 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: async call") {
   CHECK(got_result);
 }
 
-TEST_CASE_FIXTURE(IpcFixture, "IPC: async callback uses TaskRunner") {
-  server_.Register("echo",
-                   [](const Json& params) -> Result<Json> { return params; });
-  REQUIRE(server_.Start());
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+TEST_CASE("IPC: server handlers can use TaskGroup") {
+  auto handler_group = TaskGroup::Sequential();
+  std::promise<std::thread::id> worker_promise;
+  auto worker_future = worker_promise.get_future();
+  handler_group->PostAsyncTask(
+      [&]() { worker_promise.set_value(std::this_thread::get_id()); });
+  std::thread::id worker_thread = worker_future.get();
 
-  QueuedTaskRunner runner;
-  IpcClient client(kTestSocket, &runner);
+  IpcServer server(kTestSocket, *handler_group);
+  IpcClient client(kTestSocket);
+
+  std::promise<std::thread::id> handler_promise;
+  auto handler_future = handler_promise.get_future();
+  server.Register("where", [&](const Json& params) -> Result<Json> {
+    (void)params;
+    handler_promise.set_value(std::this_thread::get_id());
+    return Json::object();
+  });
+
+  REQUIRE(server.Start());
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
   REQUIRE(client.Connect());
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-  std::atomic<bool> got_result{false};
-  Json params = Json::object();
-  params["value"] = Json(std::string("queued"));
-  client.CallAsync("echo", params, [&](Result<Json> r) {
-    CHECK(r.ok());
-    CHECK(r->get_string("value").value_or("") == "queued");
-    got_result = true;
-  });
-
-  REQUIRE(runner.WaitForTask());
-  CHECK(!got_result);
-  runner.RunPending();
-  CHECK(got_result);
+  auto result = client.Call("where");
+  REQUIRE(result.ok());
+  REQUIRE(handler_future.wait_for(std::chrono::seconds(1)) ==
+          std::future_status::ready);
+  CHECK(handler_future.get() == worker_thread);
 
   client.Disconnect();
+  server.Stop();
+  handler_group->StopWaitAll();
 }
 
 TEST_CASE_FIXTURE(IpcFixture, "IPC: async callback can use TaskGroup") {

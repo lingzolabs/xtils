@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "xtils/system/unix_socket.h"
-#include "xtils/tasks/task_runner.h"
 #include "xtils/utils/json.h"
 #include "xtils/utils/result.h"
 #include "xtils/utils/signal.h"
@@ -61,7 +60,8 @@ class IpcServer {
   // Notification handler receives params but returns nothing
   using NotifyHandler = std::function<void(const Json& params)>;
 
-  explicit IpcServer(const std::string& address, TaskRunner* runner = nullptr);
+  explicit IpcServer(const std::string& address);
+  explicit IpcServer(const std::string& address, TaskGroup& handler_group);
   ~IpcServer();
 
   // Register a method handler (responds to client)
@@ -91,11 +91,16 @@ class IpcServer {
   void AcceptLoop();
   void ClientReadLoop(std::shared_ptr<ClientConn> conn);
   void HandleMessage(std::shared_ptr<ClientConn> conn, const std::string& line);
+  void DispatchHandler(std::function<void()> task);
   void SendJsonTo(const std::shared_ptr<ClientConn>& conn, const Json& msg);
   void SendTo(const std::shared_ptr<ClientConn>& conn, const std::string& msg);
+  static void SendJsonToConn(const std::shared_ptr<ClientConn>& conn,
+                             const Json& msg);
+  static void SendToConn(const std::shared_ptr<ClientConn>& conn,
+                         const std::string& msg);
 
   std::string address_;
-  TaskRunner* runner_;
+  TaskGroup* handler_group_ = nullptr;
   UnixSocketRaw listen_socket_;
   SockFamily family_ = SockFamily::kUnspec;
   std::atomic<bool> running_{false};
@@ -115,7 +120,7 @@ class IpcClient {
   using NotifyCallback =
       std::function<void(const std::string& method, const Json& params)>;
 
-  explicit IpcClient(const std::string& address, TaskRunner* runner = nullptr);
+  explicit IpcClient(const std::string& address);
   explicit IpcClient(const std::string& address, TaskGroup& callback_group);
   ~IpcClient();
 
@@ -159,7 +164,6 @@ class IpcClient {
   bool SendRaw(const std::string& data);
 
   std::string address_;
-  TaskRunner* callback_runner_ = nullptr;
   TaskGroup* callback_group_ = nullptr;
   UnixSocketRaw socket_;
   SockFamily family_ = SockFamily::kUnspec;

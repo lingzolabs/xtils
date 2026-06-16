@@ -19,9 +19,13 @@ bool ShouldUnlinkAddress(SockFamily family, const std::string& address) {
   return family == SockFamily::kUnix && !address.empty() && address[0] != '@';
 }
 
-TaskGroup* DefaultIpcCallbackGroup() {
+int DefaultIpcWorkerCount() {
   unsigned int workers = std::thread::hardware_concurrency();
-  static auto group = TaskGroup::Parallel(workers == 0 ? 2 : workers);
+  return static_cast<int>(workers < 2 ? 2 : workers);
+}
+
+TaskGroup* DefaultIpcTaskGroup() {
+  static auto group = TaskGroup::Parallel(DefaultIpcWorkerCount());
   return group.get();
 }
 
@@ -31,9 +35,14 @@ TaskGroup* DefaultIpcCallbackGroup() {
 // IpcServer
 // =============================================================================
 
-IpcServer::IpcServer(const std::string& address, TaskRunner* runner)
+IpcServer::IpcServer(const std::string& address)
     : address_(address),
-      runner_(runner),
+      handler_group_(DefaultIpcTaskGroup()),
+      family_(GetSockFamily(address.c_str())) {}
+
+IpcServer::IpcServer(const std::string& address, TaskGroup& handler_group)
+    : address_(address),
+      handler_group_(&handler_group),
       family_(GetSockFamily(address.c_str())) {}
 
 IpcServer::~IpcServer() { Stop(); }
@@ -204,11 +213,18 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
   bool is_notification = (id_ptr == nullptr);
 
   if (is_notification) {
-    // Notification — call handler but don't respond
-    std::lock_guard<std::mutex> lock(handlers_mu_);
-    auto it = notify_handlers_.find(method);
-    if (it != notify_handlers_.end()) {
-      it->second(params);
+    // Notification — call handler but don't respond.
+    NotifyHandler handler;
+    {
+      std::lock_guard<std::mutex> lock(handlers_mu_);
+      auto it = notify_handlers_.find(method);
+      if (it != notify_handlers_.end()) {
+        handler = it->second;
+      }
+    }
+    if (handler) {
+      DispatchHandler([handler = std::move(handler),
+                       params = std::move(params)]() { handler(params); });
     }
     return;
   }
@@ -228,15 +244,21 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
   response["id"] = *id_ptr;
 
   if (handler) {
-    auto result = handler(params);
-    if (result.ok()) {
-      response["result"] = *result;
-    } else {
-      Json err_obj = Json::object();
-      err_obj["code"] = Json(static_cast<int64_t>(result.error().code));
-      err_obj["message"] = Json(result.error().message);
-      response["error"] = std::move(err_obj);
-    }
+    DispatchHandler([conn, handler = std::move(handler),
+                     params = std::move(params),
+                     response = std::move(response)]() mutable {
+      auto result = handler(params);
+      if (result.ok()) {
+        response["result"] = *result;
+      } else {
+        Json err_obj = Json::object();
+        err_obj["code"] = Json(static_cast<int64_t>(result.error().code));
+        err_obj["message"] = Json(result.error().message);
+        response["error"] = std::move(err_obj);
+      }
+      SendJsonToConn(conn, response);
+    });
+    return;
   } else {
     Json err_obj = Json::object();
     err_obj["code"] = Json(static_cast<int64_t>(jsonrpc::kMethodNotFound));
@@ -247,15 +269,30 @@ void IpcServer::HandleMessage(std::shared_ptr<ClientConn> conn,
   SendJsonTo(conn, response);
 }
 
+void IpcServer::DispatchHandler(std::function<void()> task) {
+  if (!task) return;
+  handler_group_->PostAsyncTask(std::move(task));
+}
+
 void IpcServer::SendJsonTo(const std::shared_ptr<ClientConn>& conn,
                            const Json& msg) {
-  std::string line = msg.dump();
-  line.push_back('\n');
-  SendTo(conn, line);
+  SendJsonToConn(conn, msg);
 }
 
 void IpcServer::SendTo(const std::shared_ptr<ClientConn>& conn,
                        const std::string& msg) {
+  SendToConn(conn, msg);
+}
+
+void IpcServer::SendJsonToConn(const std::shared_ptr<ClientConn>& conn,
+                               const Json& msg) {
+  std::string line = msg.dump();
+  line.push_back('\n');
+  SendToConn(conn, line);
+}
+
+void IpcServer::SendToConn(const std::shared_ptr<ClientConn>& conn,
+                           const std::string& msg) {
   if (!conn) return;
 
   std::lock_guard<std::mutex> lock(conn->write_mu);
@@ -269,10 +306,9 @@ void IpcServer::SendTo(const std::shared_ptr<ClientConn>& conn,
 // IpcClient
 // =============================================================================
 
-IpcClient::IpcClient(const std::string& address, TaskRunner* runner)
+IpcClient::IpcClient(const std::string& address)
     : address_(address),
-      callback_runner_(runner),
-      callback_group_(runner ? nullptr : DefaultIpcCallbackGroup()),
+      callback_group_(DefaultIpcTaskGroup()),
       family_(GetSockFamily(address.c_str())) {}
 
 IpcClient::IpcClient(const std::string& address, TaskGroup& callback_group)
@@ -440,14 +476,6 @@ void IpcClient::FailPendingCalls(const char* message) {
 void IpcClient::DispatchCallback(std::function<void(Result<Json>)> callback,
                                  Result<Json> result) {
   if (!callback) return;
-
-  if (callback_runner_) {
-    callback_runner_->PostTask(
-        [callback = std::move(callback), result = std::move(result)]() mutable {
-          callback(std::move(result));
-        });
-    return;
-  }
 
   callback_group_->PostAsyncTask(
       [callback = std::move(callback), result = std::move(result)]() mutable {
