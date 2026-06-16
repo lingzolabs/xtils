@@ -18,6 +18,8 @@
 
 namespace xtils {
 
+class TaskGroup;
+
 // JSON-RPC 2.0 error codes
 namespace jsonrpc {
 constexpr int kParseError = -32700;
@@ -114,6 +116,7 @@ class IpcClient {
       std::function<void(const std::string& method, const Json& params)>;
 
   explicit IpcClient(const std::string& address, TaskRunner* runner = nullptr);
+  explicit IpcClient(const std::string& address, TaskGroup& callback_group);
   ~IpcClient();
 
   bool Connect();
@@ -156,7 +159,8 @@ class IpcClient {
   bool SendRaw(const std::string& data);
 
   std::string address_;
-  TaskRunner* runner_;
+  TaskRunner* callback_runner_ = nullptr;
+  TaskGroup* callback_group_ = nullptr;
   UnixSocketRaw socket_;
   SockFamily family_ = SockFamily::kUnspec;
   std::mutex send_mu_;

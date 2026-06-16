@@ -620,6 +620,9 @@ server.Stop();
 
 // Client side
 IpcClient client("/tmp/app.sock");
+// Or choose an explicit async callback executor:
+// auto callbacks = TaskGroup::Parallel(4);
+// IpcClient client("/tmp/app.sock", *callbacks);
 client.Connect();
 Result<Json> r = client.Call("echo", Json::object(), 5000);
 client.CallAsync("echo", Json::object(), [](Result<Json> r) {});
@@ -628,7 +631,7 @@ Subscription sub = client.OnNotify("broadcast", [](auto method, auto params) {})
 client.Disconnect();
 ```
 
-Wire format is newline-delimited JSON-RPC 2.0. Requests include `jsonrpc`, `id`, `method`, and optional `params`; notifications omit `id` and do not receive a response. The same API works over filesystem Unix sockets, Linux abstract Unix sockets, TCP IPv4, and TCP IPv6 addresses. `CallAsync()` does not create a per-call waiter thread; completions are driven by the IPC read loop and callbacks are posted to the constructor `TaskRunner` when one is provided, otherwise to a shared sequential callback `TaskGroup`.
+Wire format is newline-delimited JSON-RPC 2.0. Requests include `jsonrpc`, `id`, `method`, and optional `params`; notifications omit `id` and do not receive a response. The same API works over filesystem Unix sockets, Linux abstract Unix sockets, TCP IPv4, and TCP IPv6 addresses. `CallAsync()` does not create a per-call waiter thread; completions are driven by the IPC read loop and callbacks are posted to the constructor `TaskRunner` when one is provided, to an explicit `TaskGroup` when constructed with one, or to a shared parallel default `TaskGroup` otherwise.
 
 ### Multipart Parser
 

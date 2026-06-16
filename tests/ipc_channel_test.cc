@@ -7,6 +7,8 @@
 #include <thread>
 #include <vector>
 
+#include "xtils/tasks/task_group.h"
+
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
@@ -279,6 +281,35 @@ TEST_CASE_FIXTURE(IpcFixture, "IPC: async callback uses TaskRunner") {
   CHECK(got_result);
 
   client.Disconnect();
+}
+
+TEST_CASE_FIXTURE(IpcFixture, "IPC: async callback can use TaskGroup") {
+  server_.Register("echo",
+                   [](const Json& params) -> Result<Json> { return params; });
+  REQUIRE(server_.Start());
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+  auto callback_group = TaskGroup::Sequential();
+  IpcClient client(kTestSocket, *callback_group);
+  REQUIRE(client.Connect());
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+  std::atomic<bool> got_result{false};
+  Json params = Json::object();
+  params["value"] = Json(std::string("task_group"));
+  client.CallAsync("echo", params, [&](Result<Json> r) {
+    CHECK(r.ok());
+    CHECK(r->get_string("value").value_or("") == "task_group");
+    got_result = true;
+  });
+
+  for (int i = 0; i < 100 && !got_result.load(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  CHECK(got_result);
+
+  client.Disconnect();
+  callback_group->StopWaitAll();
 }
 
 TEST_CASE_FIXTURE(IpcFixture, "IPC: call timeout") {

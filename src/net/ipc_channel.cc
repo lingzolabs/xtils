@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <thread>
 #include <utility>
 
 #include "xtils/tasks/task_group.h"
@@ -18,8 +19,9 @@ bool ShouldUnlinkAddress(SockFamily family, const std::string& address) {
   return family == SockFamily::kUnix && !address.empty() && address[0] != '@';
 }
 
-TaskGroup* IpcCallbackGroup() {
-  static auto group = TaskGroup::Sequential();
+TaskGroup* DefaultIpcCallbackGroup() {
+  unsigned int workers = std::thread::hardware_concurrency();
+  static auto group = TaskGroup::Parallel(workers == 0 ? 2 : workers);
   return group.get();
 }
 
@@ -269,7 +271,13 @@ void IpcServer::SendTo(const std::shared_ptr<ClientConn>& conn,
 
 IpcClient::IpcClient(const std::string& address, TaskRunner* runner)
     : address_(address),
-      runner_(runner),
+      callback_runner_(runner),
+      callback_group_(runner ? nullptr : DefaultIpcCallbackGroup()),
+      family_(GetSockFamily(address.c_str())) {}
+
+IpcClient::IpcClient(const std::string& address, TaskGroup& callback_group)
+    : address_(address),
+      callback_group_(&callback_group),
       family_(GetSockFamily(address.c_str())) {}
 
 IpcClient::~IpcClient() { Disconnect(); }
@@ -433,15 +441,15 @@ void IpcClient::DispatchCallback(std::function<void(Result<Json>)> callback,
                                  Result<Json> result) {
   if (!callback) return;
 
-  if (runner_) {
-    runner_->PostTask(
+  if (callback_runner_) {
+    callback_runner_->PostTask(
         [callback = std::move(callback), result = std::move(result)]() mutable {
           callback(std::move(result));
         });
     return;
   }
 
-  IpcCallbackGroup()->PostAsyncTask(
+  callback_group_->PostAsyncTask(
       [callback = std::move(callback), result = std::move(result)]() mutable {
         callback(std::move(result));
       });
