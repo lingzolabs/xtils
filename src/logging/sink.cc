@@ -232,5 +232,57 @@ void FileSink::write(std::string_view msg) { impl_->write(msg); }
 
 void FileSink::flush() { impl_->flush(); }
 
+// ============================================================================
+// JsonFormatter
+// ============================================================================
+
+static void AppendJsonString(std::string& out, std::string_view s) {
+  out.push_back('"');
+  for (char c : s) {
+    switch (c) {
+      case '"': out.append("\\\""); break;
+      case '\\': out.append("\\\\"); break;
+      case '\n': out.append("\\n"); break;
+      case '\r': out.append("\\r"); break;
+      case '\t': out.append("\\t"); break;
+      case '\b': out.append("\\b"); break;
+      case '\f': out.append("\\f"); break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          char buf[8];
+          snprintf(buf, sizeof(buf), "\\u%04x", c);
+          out.append(buf);
+        } else {
+          out.push_back(c);
+        }
+    }
+  }
+  out.push_back('"');
+}
+
+std::string JsonFormatter::Format(const LogEntry& entry) const {
+  char time_buf[32];
+  FormatTimestamp(entry.timestamp, time_buf, sizeof(time_buf));
+
+  std::string out;
+  out.reserve(entry.message.size() + 128);
+  out.push_back('{');
+  out.append("\"time\":");
+  AppendJsonString(out, time_buf);
+  out.append(",\"level\":");
+  AppendJsonString(out, to_string(entry.level));
+  out.append(",\"tag\":");
+  AppendJsonString(out, entry.tag ? entry.tag : "");
+  out.append(",\"file\":");
+  AppendJsonString(out, entry.file_name ? entry.file_name : "");
+  out.append(",\"line\":");
+  out.append(std::to_string(entry.line));
+  out.append(",\"msg\":");
+  AppendJsonString(out, entry.message);
+  out.push_back('}');
+  out.push_back('\n');
+  return out;
+}
+
 }  // namespace logger
 }  // namespace xtils

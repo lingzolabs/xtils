@@ -50,6 +50,14 @@ class ColorFormatter : public Formatter {
   std::string Format(const LogEntry& entry) const override;
 };
 
+// One-line JSON formatter — emits each entry as a JSON object with
+// timestamp/level/tag/file/line/msg fields. Useful for downstream sinks
+// that pipe into log aggregators (ELK, Loki, Splunk, etc).
+class JsonFormatter : public Formatter {
+ public:
+  std::string Format(const LogEntry& entry) const override;
+};
+
 // Sink interface — minimal and clean
 struct Sink {
   virtual ~Sink() = default;
