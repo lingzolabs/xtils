@@ -328,20 +328,30 @@ Router::Router(HttpMethod method, const std::string& pattern,
 void Router::CompilePattern() {
   std::string regex_pattern = pattern_;
 
-  // Check if pattern contains regex characters or parameter placeholders
-  if (pattern_.find('{') != std::string::npos ||
+  // Detect parameter syntax: {param} (legacy), :param (Express/Gin style),
+  // or regex glob characters.
+  bool has_brace = pattern_.find('{') != std::string::npos;
+  bool has_colon_param = false;
+  // A leading-colon path segment like "/foo/:id" or ":id" counts as a
+  // parameter; a literal colon mid-segment ("/foo:bar") does not.
+  for (size_t i = 0; i < pattern_.size(); ++i) {
+    if (pattern_[i] == ':' && (i == 0 || pattern_[i - 1] == '/')) {
+      has_colon_param = true;
+      break;
+    }
+  }
+
+  if (has_brace || has_colon_param ||
       pattern_.find('*') != std::string::npos ||
       pattern_.find('^') != std::string::npos ||
       pattern_.find('$') != std::string::npos) {
     is_regex_ = true;
 
-    // Convert {param} to named capture groups
+    // Convert {param} to a capture group.
     size_t pos = 0;
     while ((pos = regex_pattern.find('{', pos)) != std::string::npos) {
       size_t end_pos = regex_pattern.find('}', pos);
       if (end_pos != std::string::npos) {
-        std::string param_name =
-            regex_pattern.substr(pos + 1, end_pos - pos - 1);
         regex_pattern.replace(pos, end_pos - pos + 1, "([^/]+)");
         pos += 7;  // Length of "([^/]+)"
       } else {
@@ -349,7 +359,28 @@ void Router::CompilePattern() {
       }
     }
 
-    // Handle wildcards
+    // Convert :param (only at start-of-segment) to a capture group.
+    // Walk left-to-right so we can use the previous char to gate.
+    {
+      std::string out;
+      out.reserve(regex_pattern.size());
+      for (size_t i = 0; i < regex_pattern.size(); ++i) {
+        char c = regex_pattern[i];
+        bool at_segment_start = (i == 0 || regex_pattern[i - 1] == '/');
+        if (c == ':' && at_segment_start) {
+          // Skip until '/' or end-of-string.
+          size_t j = i + 1;
+          while (j < regex_pattern.size() && regex_pattern[j] != '/') ++j;
+          out.append("([^/]+)");
+          i = j - 1;  // for-loop increments to j next
+        } else {
+          out.push_back(c);
+        }
+      }
+      regex_pattern = std::move(out);
+    }
+
+    // Handle wildcards (legacy: '*' → any single char).
     std::replace(regex_pattern.begin(), regex_pattern.end(), '*', '.');
     regex_pattern = "^" + regex_pattern + "$";
   } else {
@@ -372,15 +403,35 @@ void Router::CompilePattern() {
 }
 
 void Router::ExtractParamNames() {
+  // {param} form
   size_t pos = 0;
   while ((pos = pattern_.find('{', pos)) != std::string::npos) {
     size_t end_pos = pattern_.find('}', pos);
-    if (end_pos != std::string::npos) {
-      std::string param_name = pattern_.substr(pos + 1, end_pos - pos - 1);
-      param_names_.push_back(param_name);
-      pos = end_pos + 1;
+    if (end_pos == std::string::npos) break;
+    std::string param_name = pattern_.substr(pos + 1, end_pos - pos - 1);
+    param_names_.push_back(param_name);
+    pos = end_pos + 1;
+  }
+
+  // :param form (only at start of a path segment).
+  // We walk and collect in pattern order alongside the {} form so the
+  // regex_match order matches param_names_ ordering.
+  // Note: rebuild ordering from scratch to guarantee correctness in mixed
+  // patterns (e.g. "/{a}/:b/{c}").
+  param_names_.clear();
+  for (size_t i = 0; i < pattern_.size();) {
+    if (pattern_[i] == '{') {
+      size_t end_pos = pattern_.find('}', i);
+      if (end_pos == std::string::npos) break;
+      param_names_.push_back(pattern_.substr(i + 1, end_pos - i - 1));
+      i = end_pos + 1;
+    } else if (pattern_[i] == ':' && (i == 0 || pattern_[i - 1] == '/')) {
+      size_t j = i + 1;
+      while (j < pattern_.size() && pattern_[j] != '/') ++j;
+      param_names_.push_back(pattern_.substr(i + 1, j - i - 1));
+      i = j;
     } else {
-      break;
+      ++i;
     }
   }
 }

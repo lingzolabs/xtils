@@ -184,3 +184,50 @@ TEST_CASE("HttpRouter: CORS enable") {
   // Should not throw
   router.EnableCors("*", "GET,POST,PUT,DELETE");
 }
+
+TEST_CASE("Router: Express-style :param extraction") {
+  Router route(HttpMethod::kGet, "/users/:id",
+               [](const HttpRequestContext&, HttpRouter::Response&) {});
+
+  RouteParams params;
+  CHECK(route.Matches(HttpMethod::kGet, "/users/abc123", params));
+  CHECK(params.Get("id") == "abc123");
+}
+
+TEST_CASE("Router: multiple :param segments") {
+  Router route(HttpMethod::kGet, "/users/:user_id/posts/:post_id",
+               [](const HttpRequestContext&, HttpRouter::Response&) {});
+
+  RouteParams params;
+  CHECK(route.Matches(HttpMethod::kGet, "/users/5/posts/99", params));
+  CHECK(params.Get("user_id") == "5");
+  CHECK(params.Get("post_id") == "99");
+}
+
+TEST_CASE("Router: :param mixed with {param}") {
+  Router route(HttpMethod::kGet, "/{tenant}/users/:id",
+               [](const HttpRequestContext&, HttpRouter::Response&) {});
+
+  RouteParams params;
+  CHECK(route.Matches(HttpMethod::kGet, "/acme/users/42", params));
+  CHECK(params.Get("tenant") == "acme");
+  CHECK(params.Get("id") == "42");
+}
+
+TEST_CASE("Router: literal mid-segment ':' is not a parameter") {
+  // foo:bar is a literal segment, not a "foo" prefix + ":bar" param.
+  Router route(HttpMethod::kGet, "/static/foo:bar",
+               [](const HttpRequestContext&, HttpRouter::Response&) {});
+
+  RouteParams params;
+  CHECK(route.Matches(HttpMethod::kGet, "/static/foo:bar", params));
+  CHECK_FALSE(route.Matches(HttpMethod::kGet, "/static/fooXY", params));
+}
+
+TEST_CASE("Router: :param fails when path component has '/'") {
+  Router route(HttpMethod::kGet, "/users/:id",
+               [](const HttpRequestContext&, HttpRouter::Response&) {});
+
+  RouteParams params;
+  CHECK_FALSE(route.Matches(HttpMethod::kGet, "/users/a/b", params));
+}
