@@ -8,6 +8,7 @@
 |----------|-------------|
 | [Architecture](architecture.md) | Project structure, build system, module dependencies |
 | [API Reference](api-reference.md) | Complete public API by module |
+| [Error Model](error-model.md) | When to use Result / optional / bool / exceptions |
 | [Scripting](scripting.md) | QuickJS scripting module — API, usage, performance |
 | [CHANGELOG](CHANGELOG.md) | Version history and breaking changes |
 

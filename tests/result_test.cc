@@ -111,3 +111,38 @@ TEST_CASE("Result: with vector type") {
   CHECK(r->size() == 3);
   CHECK((*r)[0] == 1);
 }
+
+TEST_CASE("Result: is_err() symmetry") {
+  Result<int> ok = Ok(1);
+  CHECK(ok.ok());
+  CHECK_FALSE(ok.is_err());
+
+  Result<int> bad = Err("nope");
+  CHECK_FALSE(bad.ok());
+  CHECK(bad.is_err());
+}
+
+TEST_CASE("Result: unwrap_or_else") {
+  Result<int> ok = Ok(7);
+  CHECK(ok.unwrap_or_else([](const Error&) { return 99; }) == 7);
+
+  Result<int> bad = Err(42, "fail");
+  int recovered = bad.unwrap_or_else(
+      [](const Error& e) { return e.code * 10; });
+  CHECK(recovered == 420);
+}
+
+TEST_CASE("Result: expect on success returns value") {
+  Result<int> ok = Ok(123);
+  CHECK(ok.expect("must be ok") == 123);
+}
+
+TEST_CASE("Result<void>: is_err()") {
+  Result<void> ok;
+  CHECK(ok.ok());
+  CHECK_FALSE(ok.is_err());
+
+  Result<void> bad = Err("nope");
+  CHECK_FALSE(bad.ok());
+  CHECK(bad.is_err());
+}

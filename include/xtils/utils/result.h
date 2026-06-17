@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -53,6 +55,7 @@ class Result {
 
   // Check success
   bool ok() const { return data_.index() == 0; }
+  bool is_err() const { return !ok(); }
   explicit operator bool() const { return ok(); }
 
   // Access value (undefined behavior if !ok())
@@ -76,6 +79,37 @@ class Result {
   T value_or(const T& fallback) const& { return ok() ? value() : fallback; }
   T value_or(T&& fallback) && {
     return ok() ? std::move(*this).value() : std::move(fallback);
+  }
+
+  // Get value or lazily compute a fallback from the error.
+  template <typename F>
+  T unwrap_or_else(F&& f) const& {
+    return ok() ? value() : f(error());
+  }
+  template <typename F>
+  T unwrap_or_else(F&& f) && {
+    return ok() ? std::move(*this).value() : f(std::move(*this).error());
+  }
+
+  // Abort with `msg` if not ok. Use for invariants you really cannot
+  // recover from — typically as a debug-time assertion in tests.
+  T& expect(const char* msg) & {
+    if (!ok()) {
+      std::fprintf(stderr,
+                   "Result::expect failed: %s [code=%d msg=%s]\n",
+                   msg, error().code, error().message.c_str());
+      std::abort();
+    }
+    return value();
+  }
+  const T& expect(const char* msg) const& {
+    if (!ok()) {
+      std::fprintf(stderr,
+                   "Result::expect failed: %s [code=%d msg=%s]\n",
+                   msg, error().code, error().message.c_str());
+      std::abort();
+    }
+    return value();
   }
 
   // Monadic operations
@@ -113,10 +147,21 @@ class Result<void, E> {
   Result& operator=(Result&&) = default;
 
   bool ok() const { return !has_error_; }
+  bool is_err() const { return has_error_; }
   explicit operator bool() const { return ok(); }
 
   E& error() & { return err_; }
   const E& error() const& { return err_; }
+
+  // Abort with `msg` if not ok.
+  void expect(const char* msg) const {
+    if (!ok()) {
+      std::fprintf(stderr,
+                   "Result::expect failed: %s [code=%d msg=%s]\n",
+                   msg, err_.code, err_.message.c_str());
+      std::abort();
+    }
+  }
 
  private:
   E err_;
