@@ -1,5 +1,9 @@
 # Architecture
 
+> **Platform:** Linux only. The implementation uses pthreads, `__NR_gettid`,
+> `<poll.h>`, `<dirent.h>`, abstract Unix sockets, and other Linux-specific
+> APIs. Windows is not supported. macOS is currently untested.
+
 ## Directory Layout
 
 ```

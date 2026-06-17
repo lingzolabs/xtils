@@ -177,7 +177,7 @@ target_link_libraries(your_target PRIVATE xtils::xtils)
 
 ### 依赖
 
-- C++17 编译器（GCC 7+、Clang 5+、MSVC 2017+）
+- C++17 编译器（GCC 7+、Clang 5+）— 仅 Linux
 - CMake ≥ 3.10
 - OpenSSL 或 mbedTLS（TLS 功能需要）
 

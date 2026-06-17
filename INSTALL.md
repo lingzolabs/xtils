@@ -6,7 +6,7 @@ This guide explains how to install and use the xtils library in your own project
 
 ### Prerequisites
 - CMake 3.10 or higher
-- C++17 compatible compiler (GCC 7+, Clang 5+, MSVC 2017+)
+- C++17 compatible compiler (GCC 7+, Clang 5+) — Linux only
 
 ### Build and Install Steps
 
@@ -164,14 +164,18 @@ If you installed xtils to a custom location, make sure to:
 
 1. Add the installation path to your `CMAKE_PREFIX_PATH` environment variable
 2. Or set `xtils_DIR` to point to the cmake config directory
-3. For runtime, you may need to add the lib directory to `LD_LIBRARY_PATH` (Linux) or `PATH` (Windows)
+3. For runtime, you may need to add the lib directory to `LD_LIBRARY_PATH`
 
 ### Compiler Compatibility
 
 Ensure your compiler supports C++17:
 - GCC 7.0 or later
 - Clang 5.0 or later
-- MSVC 2017 (Visual Studio 15.0) or later
+
+**Platform support:** Linux only. The implementation uses Linux-specific
+system APIs (pthreads, `__NR_gettid` syscall, `<poll.h>`, `<dirent.h>`,
+abstract Unix sockets). Windows is not supported. macOS is currently
+untested.
 
 ## Integration Examples
 
@@ -211,7 +215,6 @@ target_link_libraries(${PROJECT_NAME} PRIVATE xtils::xtils)
 target_compile_options(${PROJECT_NAME} PRIVATE
     $<$<CXX_COMPILER_ID:GNU>:-Wall -Wextra>
     $<$<CXX_COMPILER_ID:Clang>:-Wall -Wextra>
-    $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
 ```
 

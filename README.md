@@ -180,7 +180,7 @@ target_link_libraries(your_target PRIVATE xtils::xtils)
 
 ### Requirements
 
-- C++17 compiler (GCC 7+, Clang 5+, MSVC 2017+)
+- C++17 compiler (GCC 7+, Clang 5+) — Linux only
 - CMake ≥ 3.10
 - OpenSSL or mbedTLS (for TLS features)
 
