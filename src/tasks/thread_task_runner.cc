@@ -75,6 +75,15 @@ void ThreadTaskRunner::PostDelayedTask(std::function<void()> task,
   task_runner_->PostDelayedTask(std::move(task), delay_ms);
 }
 
+ThreadTaskRunner::DelayedTaskHandle ThreadTaskRunner::PostDelayedTaskWithHandle(
+    std::function<void()> task, uint32_t delay_ms) {
+  return task_runner_->PostDelayedTaskWithHandle(std::move(task), delay_ms);
+}
+
+bool ThreadTaskRunner::CancelDelayedTask(DelayedTaskHandle handle) {
+  return task_runner_->CancelDelayedTask(handle);
+}
+
 void ThreadTaskRunner::AddFileDescriptorWatch(
     PlatformHandle handle, std::function<void()> watch_task) {
   task_runner_->AddFileDescriptorWatch(handle, std::move(watch_task));

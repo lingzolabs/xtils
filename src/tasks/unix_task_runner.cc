@@ -113,7 +113,7 @@ void UnixTaskRunner::RunImmediateAndDelayedTask() {
     if (!delayed_tasks_.empty()) {
       auto it = delayed_tasks_.begin();
       if (now + advanced_time_for_testing_ >= it->first) {
-        delayed_task = std::move(it->second);
+        delayed_task = std::move(it->second.task);
         delayed_tasks_.erase(it);
       }
     }
@@ -199,10 +199,41 @@ void UnixTaskRunner::PostDelayedTask(std::function<void()> task,
   TimeMillis runtime = GetWallTimeMs() + TimeMillis(delay_ms);
   {
     std::lock_guard<std::mutex> lock(lock_);
+    DelayedSlot slot;
+    slot.task = std::move(task);
     delayed_tasks_.insert(
-        std::make_pair(runtime + advanced_time_for_testing_, std::move(task)));
+        std::make_pair(runtime + advanced_time_for_testing_, std::move(slot)));
   }
   WakeUp();
+}
+
+UnixTaskRunner::DelayedTaskHandle UnixTaskRunner::PostDelayedTaskWithHandle(
+    std::function<void()> task, uint32_t delay_ms) {
+  TimeMillis runtime = GetWallTimeMs() + TimeMillis(delay_ms);
+  DelayedTaskHandle handle =
+      next_delayed_handle_.fetch_add(1, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(lock_);
+    DelayedSlot slot;
+    slot.task = std::move(task);
+    slot.handle = handle;
+    delayed_tasks_.insert(
+        std::make_pair(runtime + advanced_time_for_testing_, std::move(slot)));
+  }
+  WakeUp();
+  return handle;
+}
+
+bool UnixTaskRunner::CancelDelayedTask(DelayedTaskHandle handle) {
+  if (handle == kInvalidDelayedTaskHandle) return false;
+  std::lock_guard<std::mutex> lock(lock_);
+  for (auto it = delayed_tasks_.begin(); it != delayed_tasks_.end(); ++it) {
+    if (it->second.handle == handle) {
+      delayed_tasks_.erase(it);
+      return true;
+    }
+  }
+  return false;
 }
 
 void UnixTaskRunner::AddFileDescriptorWatch(PlatformHandle fd,

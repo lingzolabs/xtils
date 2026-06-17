@@ -79,6 +79,9 @@ class UnixTaskRunner : public TaskRunner {
   // TaskRunner implementation:
   void PostTask(std::function<void()>) override;
   void PostDelayedTask(std::function<void()>, uint32_t delay_ms) override;
+  DelayedTaskHandle PostDelayedTaskWithHandle(std::function<void()> t,
+                                              uint32_t delay_ms) override;
+  bool CancelDelayedTask(DelayedTaskHandle handle) override;
   void AddFileDescriptorWatch(PlatformHandle, std::function<void()>) override;
   void RemoveFileDescriptorWatch(PlatformHandle) override;
   bool RunsTasksOnCurrentThread() const override;
@@ -106,7 +109,15 @@ class UnixTaskRunner : public TaskRunner {
   std::mutex lock_;
 
   std::deque<std::function<void()>> immediate_tasks_;
-  std::multimap<TimeMillis, std::function<void()>> delayed_tasks_;
+  // Each delayed task carries a cancellation handle. handle == 0 means
+  // "untracked" (came in via PostDelayedTask), handle != 0 means it was
+  // tracked and may be cancelled.
+  struct DelayedSlot {
+    std::function<void()> task;
+    DelayedTaskHandle handle = kInvalidDelayedTaskHandle;
+  };
+  std::multimap<TimeMillis, DelayedSlot> delayed_tasks_;
+  std::atomic<DelayedTaskHandle> next_delayed_handle_{1};
   bool quit_ = false;
   TimeMillis advanced_time_for_testing_ = TimeMillis(0);
 

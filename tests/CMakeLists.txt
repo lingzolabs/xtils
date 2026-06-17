@@ -59,6 +59,7 @@ add_xtils_test(test_signal signal_test.cc)
 add_xtils_test(test_serialize serialize_test.cc)
 add_xtils_test(test_future future_test.cc)
 add_xtils_test(test_ipc_channel ipc_channel_test.cc)
+add_xtils_test(test_task_runner_ext task_runner_ext_test.cc)
 set_tests_properties(test_ipc_channel
     PROPERTIES RESOURCE_LOCK "network_port")
 add_xtils_test(test_websocket websocket_test.cc)

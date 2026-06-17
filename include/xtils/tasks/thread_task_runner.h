@@ -43,6 +43,9 @@ class ThreadTaskRunner : public TaskRunner {
   // These methods just proxy to the underlying task_runner_.
   void PostTask(std::function<void()>) override;
   void PostDelayedTask(std::function<void()>, uint32_t delay_ms) override;
+  DelayedTaskHandle PostDelayedTaskWithHandle(std::function<void()>,
+                                              uint32_t delay_ms) override;
+  bool CancelDelayedTask(DelayedTaskHandle handle) override;
   void AddFileDescriptorWatch(PlatformHandle, std::function<void()>) override;
   void RemoveFileDescriptorWatch(PlatformHandle) override;
   bool RunsTasksOnCurrentThread() const override;
