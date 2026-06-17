@@ -132,9 +132,6 @@ class Config {
   void Print() const;
   auto Options() { return options_; }
 
-  // Deprecated wrappers (will be removed in a future version)
-#include "xtils/config/config_compat.h"
-
  private:
   std::map<std::string, Option> options_;
   Json data_;

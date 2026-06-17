@@ -68,27 +68,6 @@ class ThreadSafe {
     cv_.notify_all();
   }
 
-#ifdef XTILS_ENABLE_DEPRECATED
-  // Deprecated wrappers
-  [[deprecated("Use PopWait() instead")]] bool pop_wait(
-      value_type& e,
-      std::chrono::seconds timeout = std::chrono::seconds::max()) {
-    return PopWait(e, timeout);
-  }
-  [[deprecated("Use TryPop() instead")]] bool try_pop(value_type& e) {
-    return TryPop(e);
-  }
-  [[deprecated("Use Push() instead")]] void push(const value_type& e) {
-    Push(e);
-  }
-  [[deprecated("Use Push() instead")]] void push(value_type&& e) {
-    Push(std::move(e));
-  }
-  [[deprecated("Use Clear() instead")]] void clear() { Clear(); }
-  [[deprecated("Use Size() instead")]] std::size_t size() { return Size(); }
-  [[deprecated("Use Quit() instead")]] void quit() { Quit(); }
-#endif  // XTILS_ENABLE_DEPRECATED
-
  private:
   T data_;
   bool quit_{false};

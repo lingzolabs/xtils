@@ -351,5 +351,3 @@ inline std::shared_ptr<TransitionCondition> MakeCondition(
 
 }  // namespace fsm
 }  // namespace xtils
-
-#include "fsm_compat.h"

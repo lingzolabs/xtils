@@ -5,6 +5,87 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ---
 
+## v2.0.0 — 2026-06
+
+Major release. Tagged after the v1.x deprecation grace period; all snake_case
+wrappers and compat shims are gone.
+
+### 💥 BREAKING CHANGES — deprecated APIs removed
+
+If you still call any of the symbols below, rename them to the PascalCase
+equivalent (already supported throughout v1.x).
+
+- **`App`** (`include/xtils/app/app.h`)
+  - `App::registor()`            → `App::Register()`
+  - `App::ins()`                 → `App::Ins()`
+  - `App::run()`                 → `App::Run()`
+  - `App::run_daemon()`          → `App::RunDaemon()`
+  - `App::init()`                → `App::Init()`
+  - `App::is_running()`          → `App::IsRunning()`
+  - `App::spawn()`               → `App::Spawn()`
+  - `App::spawn_async()`         → `App::SpawnAsync()`
+  - `App::every()` / `delay()`   → `App::Every()` / `Delay()`
+  - `App::emit()` / `connect()`  → `App::Emit()` / `Connect()`
+  - `App::conf()`                → `App::Conf()`
+- **`Service` / module-level** (`include/xtils/app/service.h`)
+  - `Service::emit()`            → `Service::Emit()`
+  - `xtils::isOk()`              → `xtils::IsOk()`
+  - `xtils::init()`              → `xtils::Init()`
+  - `xtils::shutdown()`          → `xtils::Shutdown()`
+  - `xtils::run_forever()`       → `xtils::RunForever()`
+  - `xtils::run_daemon()`        → `xtils::RunDaemon()`
+- **`TaskGroup`** (`include/xtils/tasks/task_group.h`)
+  - `is_busy()` / `size()` / `stop()` / `stop_wait_all()` / `main_runner()`
+    → `IsBusy()` / `Size()` / `Stop()` / `StopWaitAll()` / `MainRunner()`
+- **`ThreadSafe<>`** (`include/xtils/utils/thread_safe.h`)
+  - `pop_wait()` / `try_pop()` / `push()` / `clear()` / `size()` / `quit()`
+    → `PopWait()` / `TryPop()` / `Push()` / `Clear()` / `Size()` / `Quit()`
+- **`Config`** — `include/xtils/config/config_compat.h` is **deleted**. Every
+  snake_case wrapper that used to live there is gone (`define()`, `parse_args()`,
+  `load_file()`, `parse_json()`, `parse()`, `get()`, etc.). All have PascalCase
+  equivalents.
+- **`fsm`** — `include/xtils/fsm/fsm_compat.h` is **deleted** along with all
+  snake_case wrappers in it.
+- **`XTILS_ENABLE_DEPRECATED`** macro is no longer recognised; remove any
+  references to it from your build system.
+
+### v2.0 highlights (cumulative since v1.2.1)
+
+The following features landed during the v1.x → v2.0 cycle and are part of
+v2.0.0:
+
+- **fix(string_utils)**: rename misnamed parameter `xtils` back to `base` in
+  every `Int*ToString` / `StringToInt*` overload (typo from a sed mass-rename).
+- **fix(app)**: replace the broken `Run()` heartbeat watchdog (false-positive
+  on first iteration) with a proper monotonic deadline; accept `threads=1`.
+- **fix(event)**: `EventManager::Stop` no longer shuts down a borrowed
+  executor; new default-constructed manager owns its own executor.
+- **fix(ipc)**: race between `UnixSocketRaw::Receive`/`Send` and `Shutdown`
+  closed via fd-validity check (was tripping CI flakily).
+- **feat(crypto)**: SHA256, HMAC-SHA1/256, secure RNG, UUID v4.
+- **feat(metrics)**: Counter/Gauge/Histogram + Prometheus text exporter.
+- **feat(logging)**: structured logging — thread-local MDC, `LogBuilder`,
+  JSON formatter sink.
+- **feat(net)**: `HttpClientPool` for concurrent HTTP requests with RAII
+  acquire handle and timeout.
+- **feat(net/router)**: support Express-style `:param` path parameters
+  alongside the existing `{param}` syntax.
+- **feat(tasks)**: extend `TaskRunner` with `CancelDelayedTask`,
+  `PostDelayedTaskWithHandle`, `PostTaskAt`, `Now()`.
+- **feat(config)**: short option flags (`-x`), env-var source via
+  `LoadEnv(prefix)`, inotify-based `ConfigWatcher` for hot reload.
+- **feat(app)**: `IService::Dependencies()` virtual + topological init order,
+  reverse-topological deinit. Cycles / unknown deps abort loudly.
+- **feat(utils/result)**: `Result<T>` gains `is_err()`, `unwrap_or_else()`,
+  `expect()`. Documented error-model conventions in `docs/error-model.md`.
+- **docs**: declare Linux-only support honestly; drop unsupported MSVC and
+  Windows claims.
+- **test**: add smoke tests for `scoped`, `weak_ptr`, `endianness`,
+  `thread_safe`, `type_traits`, `exception`. Json boundary tests for
+  self-assign, surrogate pairs, deep recursion. Total test count up to 48.
+
+---
+
 ## Unreleased
 
 ### 2026-06 — IPC Transport

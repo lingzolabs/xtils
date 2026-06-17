@@ -27,17 +27,6 @@ class App {
   void Register(std::list<std::shared_ptr<IService>> services);
   void Register(std::shared_ptr<IService> p);
 
-#ifdef XTILS_ENABLE_DEPRECATED
-  [[deprecated("Use Register() instead")]]
-  void registor(std::list<std::shared_ptr<IService>> services) {
-    Register(std::move(services));
-  }
-  [[deprecated("Use Register() instead")]]
-  void registor(std::shared_ptr<IService> p) {
-    Register(std::move(p));
-  }
-#endif  // XTILS_ENABLE_DEPRECATED
-
  public:
   // until shutdown
   void Run();
@@ -85,41 +74,6 @@ class App {
   // dependency-graph behaviour can be unit-tested without spinning up the
   // full Run() loop.
   std::list<std::shared_ptr<IService>> TopoSortServices();
-
-#ifdef XTILS_ENABLE_DEPRECATED
-  // Deprecated wrappers (define XTILS_ENABLE_DEPRECATED to use)
-  [[deprecated("Use Ins() instead")]]
-  static App* ins() { return Ins(); }
-  [[deprecated("Use Run() instead")]]
-  void run() { Run(); }
-  [[deprecated("Use RunDaemon() instead")]]
-  void run_daemon() { RunDaemon(); }
-  [[deprecated("Use Init() instead")]]
-  void init(const std::vector<std::string>& args) { Init(args); }
-  [[deprecated("Use IsRunning() instead")]]
-  bool is_running() { return IsRunning(); }
-  [[deprecated("Use Spawn() instead")]]
-  void spawn(Task task) { Spawn(std::move(task)); }
-  [[deprecated("Use SpawnAsync() instead")]]
-  void spawn_async(Task task, Task main = nullptr) {
-    SpawnAsync(std::move(task), std::move(main));
-  }
-  [[deprecated("Use Every() instead")]]
-  void every(uint32_t ms, TimerCallback cb) { Every(ms, std::move(cb)); }
-  [[deprecated("Use Delay() instead")]]
-  void delay(uint32_t ms, TimerCallback cb) { Delay(ms, std::move(cb)); }
-  template <typename Event>
-  [[deprecated("Use Emit() instead")]]
-  void emit(const Event& e) { Emit<Event>(e); }
-  template <typename Event, typename TypedCallback>
-  [[deprecated("Use Connect() instead")]]
-  Subscription connect(Event id, TypedCallback cb) { return Connect<Event>(id, std::move(cb)); }
-  template <typename Event, typename TypedCallback>
-  [[deprecated("Use Connect() instead")]]
-  Subscription connect(TypedCallback cb) { return Connect<Event>(std::move(cb)); }
-  [[deprecated("Use Conf() instead")]]
-  const Config& conf() { return Conf(); }
-#endif  // XTILS_ENABLE_DEPRECATED
 
  private:
   void deinit();

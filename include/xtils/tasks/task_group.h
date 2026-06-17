@@ -67,21 +67,6 @@ class TaskGroup {
 
   std::shared_ptr<TaskRunner> MainRunner();
 
-#ifdef XTILS_ENABLE_DEPRECATED
-  // Deprecated wrappers
-  [[deprecated("Use IsBusy() instead")]] bool is_busy() { return IsBusy(); }
-  [[deprecated("Use Size() instead")]] int size() { return Size(); }
-  [[deprecated("Use Stop() instead")]] void stop() { Stop(); }
-  [[deprecated("Use StopWaitAll() instead")]] bool stop_wait_all(
-      std::chrono::seconds timeout = std::chrono::seconds(5)) {
-    return StopWaitAll(timeout);
-  }
-  [[deprecated("Use MainRunner() instead")]] std::shared_ptr<TaskRunner>
-  main_runner() {
-    return MainRunner();
-  }
-#endif  // XTILS_ENABLE_DEPRECATED
-
  private:
   void runLoop(int id);
   void loopExited(int id);
