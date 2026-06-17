@@ -70,6 +70,7 @@ add_xtils_test(test_thread_safe thread_safe_test.cc)
 add_xtils_test(test_weak_ptr weak_ptr_test.cc)
 add_xtils_test(test_scoped scoped_test.cc)
 add_xtils_test(test_log_builder log_builder_test.cc)
+add_xtils_test(test_metrics metrics_test.cc)
 set_tests_properties(test_ipc_channel
     PROPERTIES RESOURCE_LOCK "network_port")
 add_xtils_test(test_websocket websocket_test.cc)
