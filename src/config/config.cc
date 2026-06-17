@@ -10,6 +10,7 @@
 #include <sstream>
 
 #include "xtils/logging/logger.h"
+#include "xtils/utils/string_utils.h"
 
 namespace xtils {
 
@@ -307,6 +308,73 @@ std::vector<std::string> Config::NoParsed() const { return no_parsed_; }
 
 bool Config::Has(const std::string& path) const {
   return Get(path).has_value();
+}
+
+size_t Config::LoadEnv(const std::string& prefix) {
+  // POSIX: <unistd.h> exposes 'environ' at global scope. Reach it through
+  // a global qualifier so we don't accidentally declare xtils::environ.
+  size_t applied = 0;
+  std::string up_prefix = prefix;
+  for (auto& c : up_prefix) c = static_cast<char>(std::toupper(c));
+  for (char** ep = ::environ; ep && *ep; ++ep) {
+    std::string entry(*ep);
+    auto eq = entry.find('=');
+    if (eq == std::string::npos) continue;
+    std::string raw_key = entry.substr(0, eq);
+    std::string value = entry.substr(eq + 1);
+
+    // If a prefix is set, the entry must start with PREFIX_; strip it.
+    if (!up_prefix.empty()) {
+      if (raw_key.size() < up_prefix.size() + 1) continue;
+      if (raw_key.compare(0, up_prefix.size(), up_prefix) != 0) continue;
+      if (raw_key[up_prefix.size()] != '_') continue;
+      raw_key = raw_key.substr(up_prefix.size() + 1);
+      // Re-attach the (lowercased) prefix as the first dot-segment.
+      // Example: XTILS_LOG_LEVEL with prefix=XTILS → 'xtils.log.level'
+      raw_key = up_prefix + "_" + raw_key;
+    }
+
+    // Lowercase + replace '_' with '.'.
+    std::string key;
+    key.reserve(raw_key.size());
+    for (char c : raw_key) {
+      if (c == '_')
+        key.push_back('.');
+      else
+        key.push_back(static_cast<char>(std::tolower(c)));
+    }
+    if (key.empty()) continue;
+
+    // Type coerce: int, double, bool, string.
+    auto try_set = [&](const Json& v) {
+      Set(key, v);
+      applied++;
+    };
+    // bool literals
+    std::string lower = value;
+    for (auto& c : lower) c = static_cast<char>(std::tolower(c));
+    if (lower == "true" || lower == "yes") {
+      try_set(Json(true));
+      continue;
+    }
+    if (lower == "false" || lower == "no") {
+      try_set(Json(false));
+      continue;
+    }
+    // integer
+    if (auto i = StringToInt64(value)) {
+      try_set(Json(*i));
+      continue;
+    }
+    // double
+    if (auto d = StringToDouble(value)) {
+      try_set(Json(*d));
+      continue;
+    }
+    // string fallback
+    try_set(Json(value));
+  }
+  return applied;
 }
 
 void Config::Set(const std::string& path, const Json& value) {

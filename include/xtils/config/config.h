@@ -84,6 +84,13 @@ class Config {
   bool ParseJson(const Json& json);
   bool Parse(const std::string& json_content);
 
+  // Import environment variables matching `<PREFIX>_<KEY>` (uppercase).
+  // The matching key is lowercased and `_` becomes `.`, e.g.
+  // XTILS_LOG_LEVEL=2 with prefix="XTILS" sets "xtils.log.level" = 2.
+  // Empty prefix imports every env var (lowercased) — use with care.
+  // Returns the number of vars actually applied (matched + parsed).
+  size_t LoadEnv(const std::string& prefix);
+
   // Primary access method with dot notation support (e.g., "server.port")
   template <typename T>
   std::optional<T> Get(const std::string& path) const;

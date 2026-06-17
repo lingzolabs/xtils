@@ -72,6 +72,7 @@ add_xtils_test(test_scoped scoped_test.cc)
 add_xtils_test(test_log_builder log_builder_test.cc)
 add_xtils_test(test_metrics metrics_test.cc)
 add_xtils_test(test_crypto crypto_test.cc)
+add_xtils_test(test_config_sources config_sources_test.cc)
 set_tests_properties(test_ipc_channel
     PROPERTIES RESOURCE_LOCK "network_port")
 add_xtils_test(test_websocket websocket_test.cc)
