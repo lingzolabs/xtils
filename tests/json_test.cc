@@ -688,6 +688,136 @@ TEST_CASE("JSON Error Handling") {
   }
 }
 
+TEST_CASE("JSON Self-Assignment Safety") {
+  // Copy self-assign for every variant type — must not double-free.
+  SUBCASE("null self-copy-assign") {
+    Json j;
+    j = j;
+    CHECK(j.is_null());
+  }
+  SUBCASE("bool self-copy-assign") {
+    Json j(true);
+    j = j;
+    CHECK(j.as_bool() == true);
+  }
+  SUBCASE("integer self-copy-assign") {
+    Json j(42);
+    j = j;
+    CHECK(j.as_integer() == 42);
+  }
+  SUBCASE("float self-copy-assign") {
+    Json j(3.14);
+    j = j;
+    CHECK(j.as_float() == 3.14);
+  }
+  SUBCASE("string self-copy-assign") {
+    Json j(std::string("hello"));
+    j = j;
+    CHECK(j.as_string() == "hello");
+  }
+  SUBCASE("array self-copy-assign") {
+    Json j(Json::array_t{Json(1), Json(2), Json(3)});
+    j = j;
+    CHECK(j.size() == 3);
+    CHECK(j[0].as_integer() == 1);
+  }
+  SUBCASE("object self-copy-assign") {
+    Json::object_t obj{{"k", Json("v")}};
+    Json j(obj);
+    j = j;
+    CHECK(j["k"].as_string() == "v");
+  }
+  // Move self-assign — implementation guards with this != &other.
+  SUBCASE("string self-move-assign") {
+    Json j(std::string("abc"));
+    j = std::move(j);
+    // After self-move, the value must remain accessible (no double-free).
+    CHECK((j.is_string() || j.is_null()));
+  }
+}
+
+TEST_CASE("JSON Moved-From State") {
+  // After std::move, source becomes null and is reusable.
+  Json src(std::string("hello"));
+  Json dst(std::move(src));
+  CHECK(dst.as_string() == "hello");
+  CHECK(src.is_null());
+  // Reuse the moved-from object.
+  src = Json(123);
+  CHECK(src.as_integer() == 123);
+}
+
+TEST_CASE("JSON UTF-16 Surrogate Pairs") {
+  SUBCASE("emoji round-trip via \\uD83D\\uDE00") {
+    // Grinning face 😀 = U+1F600, encoded as surrogate pair D83D DE00.
+    std::string text = R"("\uD83D\uDE00")";
+    auto j = Json::parse(text);
+    REQUIRE(j);
+    REQUIRE(j->is_string());
+    // The decoded string must be valid UTF-8 for U+1F600 (4 bytes).
+    const std::string& s = j->as_string();
+    CHECK(s.size() == 4);
+    CHECK(static_cast<unsigned char>(s[0]) == 0xF0);
+    CHECK(static_cast<unsigned char>(s[1]) == 0x9F);
+    CHECK(static_cast<unsigned char>(s[2]) == 0x98);
+    CHECK(static_cast<unsigned char>(s[3]) == 0x80);
+  }
+  SUBCASE("lone high surrogate is rejected") {
+    std::error_code ec;
+    Json::parse(R"("\uD83D")", ec);
+    CHECK(ec);  // parse must fail
+  }
+  SUBCASE("lone low surrogate is rejected") {
+    std::error_code ec;
+    Json::parse(R"("\uDE00")", ec);
+    CHECK(ec);
+  }
+  SUBCASE("BMP code point round-trip via \\u00E9") {
+    // é = U+00E9 = 0xC3 0xA9 in UTF-8.
+    auto j = Json::parse(R"("\u00E9")");
+    REQUIRE(j);
+    const std::string& s = j->as_string();
+    CHECK(s.size() == 2);
+    CHECK(static_cast<unsigned char>(s[0]) == 0xC3);
+    CHECK(static_cast<unsigned char>(s[1]) == 0xA9);
+  }
+}
+
+TEST_CASE("JSON Deep Recursion Limit") {
+  // MAX_PARSE_DEPTH is 100 in the implementation. Build deeper input and
+  // verify it is rejected gracefully (no crash, parse returns error).
+  std::string text;
+  text.reserve(300);
+  for (int i = 0; i < 150; ++i) text += '[';
+  for (int i = 0; i < 150; ++i) text += ']';
+
+  std::error_code ec;
+  Json::parse(text, ec);
+  CHECK(ec);  // depth exceeded must error, not crash
+}
+
+TEST_CASE("JSON Mixed Round-Trip") {
+  Json::object_t obj;
+  obj["name"] = Json("alice");
+  obj["age"] = Json(30);
+  obj["active"] = Json(true);
+  obj["score"] = Json(98.5);
+  obj["tags"] = Json(Json::array_t{Json("a"), Json("b")});
+  obj["profile"] =
+      Json(Json::object_t{{"city", Json("sh")}, {"id", Json(7)}});
+  Json src(obj);
+
+  std::string serialized = src.dump();
+  auto reparsed = Json::parse(serialized);
+  REQUIRE(reparsed);
+  CHECK((*reparsed)["name"].as_string() == "alice");
+  CHECK((*reparsed)["age"].as_integer() == 30);
+  CHECK((*reparsed)["active"].as_bool() == true);
+  CHECK((*reparsed)["score"].as_float() == 98.5);
+  CHECK((*reparsed)["tags"].size() == 2);
+  CHECK((*reparsed)["profile"]["city"].as_string() == "sh");
+}
+
 // Test runner
 int main() {
   doctest::Context context;
