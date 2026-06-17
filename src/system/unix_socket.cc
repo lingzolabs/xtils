@@ -414,7 +414,12 @@ ssize_t UnixSocketRaw::SendMsgAllPosix(struct msghdr* msg) {
 
 ssize_t UnixSocketRaw::Send(const void* msg, size_t len, const int* send_fds,
                             size_t num_fds) {
-  XTILS_DCHECK(fd_);
+  // Same Shutdown-vs-thread race as Receive(): be defensive instead of
+  // aborting in debug builds.
+  if (!fd_) {
+    errno = EBADF;
+    return -1;
+  }
   msghdr msg_hdr = {};
   iovec iov = {const_cast<void*>(msg), len};
   msg_hdr.msg_iov = &iov;
@@ -443,7 +448,14 @@ ssize_t UnixSocketRaw::Send(const void* msg, size_t len, const int* send_fds,
 
 ssize_t UnixSocketRaw::Receive(void* msg, size_t len, ScopedFile* fd_vec,
                                size_t max_files) {
-  XTILS_DCHECK(fd_);
+  // Avoid asserting on fd validity here: the socket may be Shutdown() from
+  // another thread between the caller's check and this call. Let the
+  // syscall fail naturally with EBADF and return -1, which existing read
+  // loops already treat as disconnect.
+  if (!fd_) {
+    errno = EBADF;
+    return -1;
+  }
   msghdr msg_hdr = {};
   iovec iov = {msg, len};
   msg_hdr.msg_iov = &iov;
