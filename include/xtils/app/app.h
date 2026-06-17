@@ -80,6 +80,12 @@ class App {
 
   const Config& Conf() { return config_; }
 
+  // For testing: returns service_ topologically ordered by Dependencies().
+  // Aborts the process on cycles or unknown dependencies. Public so
+  // dependency-graph behaviour can be unit-tested without spinning up the
+  // full Run() loop.
+  std::list<std::shared_ptr<IService>> TopoSortServices();
+
 #ifdef XTILS_ENABLE_DEPRECATED
   // Deprecated wrappers (define XTILS_ENABLE_DEPRECATED to use)
   [[deprecated("Use Ins() instead")]]
@@ -128,6 +134,7 @@ class App {
   void init_log();
   void init_inspect();
   void print_banner();
+
 
  private:
   Config config_;

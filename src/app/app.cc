@@ -187,6 +187,11 @@ void App::pre_run() {
   print_banner();
   init_inspect();
 
+  // Topologically sort services by Dependencies(). Falls back to
+  // registration order when no service declares any dependency.
+  std::list<std::shared_ptr<IService>> ordered = TopoSortServices();
+  service_ = std::move(ordered);
+
   for (auto &p : service_) {
     p->ctx = this;
     p->Init();
@@ -264,9 +269,10 @@ void App::deinit() {
 
   // Deinit services FIRST while infrastructure is still running,
   // so services can still use event loop / thread pool for cleanup
-  // (e.g. WebSocket close handshake, flush pending I/O)
-  for (auto &p : service_) {
-    p->Deinit();
+  // (e.g. WebSocket close handshake, flush pending I/O).
+  // Reverse topological order: leaves before their dependencies.
+  for (auto it = service_.rbegin(); it != service_.rend(); ++it) {
+    (*it)->Deinit();
   }
 
   async_tg_->Stop();  // stop task group
@@ -336,4 +342,83 @@ void App::Register(std::shared_ptr<IService> p) {
 }
 
 bool App::IsRunning() { return running_; }
+
+// Topologically sort services_ by IService::Dependencies(). Uses Kahn's
+// algorithm: start with services that have no in-edges and peel off.
+// On a cycle, logs the remaining services and exit(1). Unknown deps log
+// + exit(1) too. When no service declares any dependency this returns
+// the original registration order untouched.
+std::list<std::shared_ptr<IService>> App::TopoSortServices() {
+  // Map name -> service ptr; name conflicts are reported then resolved
+  // first-wins to keep the algorithm stable.
+  std::map<std::string, std::shared_ptr<IService>> by_name;
+  for (const auto &s : service_) {
+    if (by_name.count(s->name)) {
+      LogE("App: duplicate service name '%s' — dependency resolution may "
+           "misbehave",
+           s->name.c_str());
+      continue;
+    }
+    by_name[s->name] = s;
+  }
+
+  // Validate dependencies and check whether any service declares one.
+  bool any_dep = false;
+  for (const auto &s : service_) {
+    for (const auto &dep : s->Dependencies()) {
+      any_dep = true;
+      if (!by_name.count(dep)) {
+        LogE("App: service '%s' depends on unknown service '%s'",
+             s->name.c_str(), dep.c_str());
+        std::cerr << "App: service '" << s->name
+                  << "' depends on unknown service '" << dep << "'"
+                  << std::endl;
+        exit(1);
+      }
+    }
+  }
+  if (!any_dep) return service_;  // preserve registration order
+
+  // Kahn's algorithm.
+  std::map<std::string, int> indegree;
+  std::map<std::string, std::vector<std::string>> reverse_deps;
+  for (const auto &s : service_) indegree[s->name] = 0;
+  for (const auto &s : service_) {
+    for (const auto &dep : s->Dependencies()) {
+      indegree[s->name]++;
+      reverse_deps[dep].push_back(s->name);
+    }
+  }
+
+  std::list<std::shared_ptr<IService>> ordered;
+  std::list<std::string> ready;
+  // Iterate in registration order so the result is stable across runs.
+  for (const auto &s : service_) {
+    if (indegree[s->name] == 0) ready.push_back(s->name);
+  }
+  while (!ready.empty()) {
+    std::string name = ready.front();
+    ready.pop_front();
+    ordered.push_back(by_name[name]);
+    for (const auto &child : reverse_deps[name]) {
+      if (--indegree[child] == 0) ready.push_back(child);
+    }
+  }
+
+  if (ordered.size() != service_.size()) {
+    LogE("App: dependency cycle detected. Services involved:");
+    std::cerr << "App: dependency cycle detected. Services involved: ";
+    bool first = true;
+    for (const auto &kv : indegree) {
+      if (kv.second > 0) {
+        if (!first) std::cerr << ", ";
+        std::cerr << kv.first;
+        first = false;
+      }
+    }
+    std::cerr << std::endl;
+    exit(1);
+  }
+  return ordered;
+}
 }  // namespace xtils

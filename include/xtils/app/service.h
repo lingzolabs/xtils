@@ -33,6 +33,13 @@ class IService {
   virtual void Deinit() = 0;
   virtual ~IService() = default;
 
+  // Names of services this service depends on. App initialises
+  // dependencies first (topological order), and deinitialises in the
+  // reverse order. Default: no dependencies.
+  virtual std::vector<std::string> Dependencies() const { return {}; }
+
+  const std::string& Name() const { return name; }
+
  protected:
   std::string name;
   friend class App;
