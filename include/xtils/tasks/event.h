@@ -43,8 +43,16 @@ using OnEvent = std::function<void(const void*)>;
 
 class EventManager {
  public:
-  explicit EventManager(std::shared_ptr<TaskGroup> tg) : tg_(tg) {}
-  ~EventManager() {}
+  // Create an EventManager with a borrowed executor. Lifecycle of `tg`
+  // remains the caller's responsibility — Stop() will NOT shut it down.
+  explicit EventManager(std::shared_ptr<TaskGroup> tg)
+      : tg_(std::move(tg)), owns_executor_(false) {}
+
+  // Convenience constructor: own a private sequential TaskGroup that is
+  // shut down together with this EventManager.
+  EventManager() : tg_(TaskGroup::Sequential()), owns_executor_(true) {}
+
+  ~EventManager() { Stop(); }
 
   template <typename EventT>
   using TypedCallback = std::function<void(const EventT&)>;
@@ -119,9 +127,23 @@ class EventManager {
     }
   }
 
+  // Disconnect all subscribers and prevent further dispatch.
+  // Does NOT shut down a borrowed executor — that is the caller's
+  // responsibility. If this EventManager owns a private executor
+  // (default-constructed), the executor is stopped here.
   void Stop() {
-    stop_ = true;
-    tg_->Stop();
+    if (stop_.exchange(true)) return;
+    {
+      std::lock_guard<std::mutex> lock(map_mutex_);
+      maps_.clear();
+    }
+    {
+      std::lock_guard<std::mutex> lock(enum_map_mutex_);
+      enum_maps_.clear();
+    }
+    if (owns_executor_ && tg_) {
+      tg_->Stop();
+    }
   }
 
  private:
@@ -193,6 +215,7 @@ class EventManager {
   std::mutex enum_map_mutex_;
   std::map<std::uint32_t, SlotList> enum_maps_;
   std::shared_ptr<TaskGroup> tg_;
+  bool owns_executor_;
   std::atomic<uint64_t> next_id_{1};
 };
 }  // namespace xtils

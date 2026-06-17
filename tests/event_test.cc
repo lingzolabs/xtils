@@ -227,6 +227,39 @@ TEST_CASE_FIXTURE(EventTestFixture, "Subscription: RAII auto-disconnect") {
   CHECK(count == 1);  // should not increment
 }
 
+TEST_CASE("EventManager: borrowed executor stays alive after Stop") {
+  // Regression: previously EventManager::Stop() called tg_->Stop(),
+  // shutting down a possibly-shared TaskGroup. The borrowed executor
+  // must remain usable after the EventManager is stopped.
+  auto tg = std::make_shared<TaskGroup>(2);
+  {
+    EventManager em(tg);
+    std::atomic<int> count{0};
+    auto sub = em.Connect<int>([&](const int& v) { count += v; });
+    em.Emit<int>(7);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CHECK(count == 7);
+    em.Stop();
+  }
+
+  // The TaskGroup must still be alive and usable here.
+  std::atomic<int> ran{0};
+  tg->PostAsyncTask([&]() { ran++; });
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK(ran == 1);
+  tg->Stop();
+}
+
+TEST_CASE("EventManager: default-constructed owns its executor") {
+  EventManager em;  // owns a private sequential TaskGroup
+  std::atomic<int> count{0};
+  auto sub = em.Connect<int>([&](const int& v) { count += v; });
+  em.Emit<int>(3);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK(count == 3);
+  // Destructor must clean up its private executor without leaks/hangs.
+}
+
 int main() {
   doctest::Context context;
   int res = context.run();
