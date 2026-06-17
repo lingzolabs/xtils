@@ -18,15 +18,15 @@ class ThreadSafe {
                std::chrono::seconds timeout = std::chrono::seconds::max()) {
     std::unique_lock<std::mutex> lock(mtx_);
     if (timeout != std::chrono::seconds::max()) {
-      auto ret =
-          cv_.wait_for(lock, timeout, [&]() { return !data_.empty() || quit_; });
+      auto ret = cv_.wait_for(lock, timeout,
+                              [&]() { return !data_.empty() || quit_; });
       if (quit_ || !ret) return false;
 
     } else {
       cv_.wait(lock, [&]() { return !data_.empty() || quit_; });
       if (quit_) return false;
     }
-    e = data_.front();
+    e = std::move(data_.front());
     data_.pop_front();
     return true;
   }
@@ -34,7 +34,7 @@ class ThreadSafe {
   bool TryPop(value_type& e) {
     std::lock_guard<std::mutex> lock(mtx_);
     if (data_.empty()) return false;
-    e = data_.front();
+    e = std::move(data_.front());
     data_.pop_front();
     return true;
   }
@@ -70,23 +70,23 @@ class ThreadSafe {
 
 #ifdef XTILS_ENABLE_DEPRECATED
   // Deprecated wrappers
-  [[deprecated("Use PopWait() instead")]]
-  bool pop_wait(value_type& e,
-                std::chrono::seconds timeout = std::chrono::seconds::max()) {
+  [[deprecated("Use PopWait() instead")]] bool pop_wait(
+      value_type& e,
+      std::chrono::seconds timeout = std::chrono::seconds::max()) {
     return PopWait(e, timeout);
   }
-  [[deprecated("Use TryPop() instead")]]
-  bool try_pop(value_type& e) { return TryPop(e); }
-  [[deprecated("Use Push() instead")]]
-  void push(const value_type& e) { Push(e); }
-  [[deprecated("Use Push() instead")]]
-  void push(value_type&& e) { Push(std::move(e)); }
-  [[deprecated("Use Clear() instead")]]
-  void clear() { Clear(); }
-  [[deprecated("Use Size() instead")]]
-  std::size_t size() { return Size(); }
-  [[deprecated("Use Quit() instead")]]
-  void quit() { Quit(); }
+  [[deprecated("Use TryPop() instead")]] bool try_pop(value_type& e) {
+    return TryPop(e);
+  }
+  [[deprecated("Use Push() instead")]] void push(const value_type& e) {
+    Push(e);
+  }
+  [[deprecated("Use Push() instead")]] void push(value_type&& e) {
+    Push(std::move(e));
+  }
+  [[deprecated("Use Clear() instead")]] void clear() { Clear(); }
+  [[deprecated("Use Size() instead")]] std::size_t size() { return Size(); }
+  [[deprecated("Use Quit() instead")]] void quit() { Quit(); }
 #endif  // XTILS_ENABLE_DEPRECATED
 
  private:

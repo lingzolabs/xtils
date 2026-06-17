@@ -63,23 +63,23 @@ TaskGroup::~TaskGroup() {
   }
 }
 
-void TaskGroup::PostTask(Task task) { main_runner_->PostTask(task); }
+void TaskGroup::PostTask(Task task) { main_runner_->PostTask(std::move(task)); }
 
 void TaskGroup::PostAsyncTask(Task task, uint32_t ms) {
   if (ms == 0) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (quit_.load()) return;
     pending_tasks_.fetch_add(1);
-    tasks_.Push(task);
+    tasks_.Push(std::move(task));
   } else {
     auto weak = weak_factory_.GetWeakPtr();
     main_runner_->PostDelayedTask(
-        [task, weak]() {
+        [task = std::move(task), weak]() mutable {
           if (auto ptr = weak.get()) {
             std::lock_guard<std::mutex> lock(ptr->state_mutex_);
             if (ptr->quit_.load()) return;
             ptr->pending_tasks_.fetch_add(1);
-            ptr->tasks_.Push(task);
+            ptr->tasks_.Push(std::move(task));
           }
         },
         ms);
