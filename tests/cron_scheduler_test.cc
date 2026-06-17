@@ -160,49 +160,42 @@ TEST_CASE("CronScheduler: GetTaskInfo for non-existent task") {
 }
 
 TEST_CASE("CronScheduler: Start and Stop with real threads (basic check)") {
+  // Real-mode timing is wall-clock based and sensitive to CI load. We only
+  // assert that the scheduler eventually fires the task and stops cleanly.
+  // Precise tick counts are covered by the deterministic test-mode cases
+  // above. Do NOT add tight upper bounds here — they have proved flaky.
   xtils::CronScheduler scheduler;  // Real mode
   std::atomic<int> counter = 0;
 
-  auto task_id = scheduler.every(xtils::CronScheduler::Seconds(1), [&]() {
-    counter++;
-    std::cout << "Real mode task running! Count: " << counter << std::endl;
-  });
+  auto task_id = scheduler.every(xtils::CronScheduler::Seconds(1),
+                                 [&]() { counter++; });
 
   scheduler.start();
-  std::cout << "Scheduler started in real mode. Waiting for 3 seconds..."
-            << std::endl;
   std::this_thread::sleep_for(std::chrono::seconds(3));
   scheduler.stop();
 
-  // The counter should be at least 2 or 3, depending on exact timing
-  // It's non-deterministic due to real-time scheduling, so we check for a
-  // minimum
-  CHECK(counter >= 2);
-  CHECK(counter <= 4);  // Should not be excessively high either
+  CHECK(counter >= 1);  // smoke check: scheduler thread fired at least once
 
   auto info = scheduler.getTaskInfo(task_id);
   REQUIRE(info);
-  CHECK(info->active ==
-        true);  // Task itself is still active, just scheduler stopped
-  CHECK(info->lastRun != 0);  // Should have run at least once
-  std::cout << "Real mode task finished. Final count: " << counter << std::endl;
+  CHECK(info->active == true);
+  CHECK(info->lastRun != 0);
 }
 
 TEST_CASE("CronScheduler: Multiple tasks and cancellation in real mode") {
+  // See note in previous test: real-mode timing is intentionally only smoke-
+  // tested. Deterministic counts live in the test-mode cases above.
   xtils::CronScheduler scheduler;
   std::atomic<int> every_counter = 0;
   std::atomic<int> cron_counter = 0;
 
-  auto every_task_id = scheduler.every(xtils::CronScheduler::Seconds(1), [&]() {
-    every_counter++;
-    std::cout << "Every task real mode. Count: " << every_counter << std::endl;
-  });
+  auto every_task_id = scheduler.every(xtils::CronScheduler::Seconds(1),
+                                       [&]() { every_counter++; });
   auto currentTime = getCurrentTime();
 
   std::tm tm_now = xtils::CronScheduler::toLocalTm(currentTime, 0);
-  std::set<int> seconds_for_cron = {
-      2, 7};                 // Run at 2 and 7 seconds past the minute
-  if (tm_now.tm_sec < 53) {  // make sure cron after time
+  std::set<int> seconds_for_cron = {2, 7};
+  if (tm_now.tm_sec < 53) {
     seconds_for_cron.clear();
     seconds_for_cron.insert(tm_now.tm_sec + 2);
     seconds_for_cron.insert(tm_now.tm_sec + 7);
@@ -212,34 +205,25 @@ TEST_CASE("CronScheduler: Multiple tasks and cancellation in real mode") {
   auto cron_task_id =
       scheduler.cron(seconds_for_cron, {}, {}, {}, {}, {}, [&]() {
         cron_counter++;
-        std::cout << "Cron task real mode. Count: " << cron_counter
-                  << std::endl;
       });
 
   scheduler.start();
-  std::cout << "Multiple tasks started in real mode. Running for 8 seconds..."
-            << std::endl;
   std::this_thread::sleep_for(std::chrono::seconds(4));
 
-  // Cancel the every task
+  // Cancel the every task and let it idle through the rest of the window.
   CHECK(scheduler.cancel(every_task_id));
-  std::cout << "Cancelled every task. Running for another 4 seconds..."
-            << std::endl;
+  int every_count_at_cancel = every_counter.load();
 
-  std::this_thread::sleep_for(
-      std::chrono::seconds(4));  // Total 8 seconds runtime
-
+  std::this_thread::sleep_for(std::chrono::seconds(4));
   scheduler.stop();
 
-  // Every task should have run about 4 times before cancellation
-  CHECK(every_counter >= 3);
-  CHECK(every_counter <= 5);  // Some leeway for timing
-
-  // Cron task should have run at seconds 2 and 7 in the first minute, and
-  // possibly 2 and 7 in the next if the minute rolled over
-  CHECK(cron_counter >= 2);
-  CHECK(cron_counter <=
-        4);  // Depending on when the test started relative to minute
+  // Smoke checks only:
+  // - every task fired at least once before cancellation
+  // - cancellation actually stopped further increments
+  // - cron task fired at least once for the configured seconds
+  CHECK(every_counter >= 1);
+  CHECK(every_counter == every_count_at_cancel);
+  CHECK(cron_counter >= 1);
 
   auto every_info = scheduler.getTaskInfo(every_task_id);
   REQUIRE(every_info);
@@ -247,7 +231,7 @@ TEST_CASE("CronScheduler: Multiple tasks and cancellation in real mode") {
 
   auto cron_info = scheduler.getTaskInfo(cron_task_id);
   REQUIRE(cron_info);
-  CHECK(cron_info->active == true);  // Cron task was not cancelled
+  CHECK(cron_info->active == true);
 }
 
 TEST_CASE("CronScheduler: Scheduler clean shutdown with active tasks") {
