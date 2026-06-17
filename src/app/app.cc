@@ -87,7 +87,12 @@ void App::Init(const std::vector<std::string> &args) {
 
   // init thread pool
   int threads_size = Conf().GetOr<int>("xtils.threads");
-  XTILS_CHECK(threads_size > 1);
+  if (threads_size < 1) {
+    LogE("xtils.threads must be >= 1, got %d", threads_size);
+    std::cerr << "xtils.threads must be >= 1, got " << threads_size
+              << std::endl;
+    exit(1);
+  }
   async_tg_ = std::make_unique<TaskGroup>(threads_size);
   // init event manager
   em_ = std::make_unique<EventManager>(
@@ -195,7 +200,9 @@ void App::RunDaemon() {
     return;
   }
   main_ = std::thread(std::bind(&App::Run, this));
-  bool ret = async_tg_->RunUntilCompleted([]() { return true; });
+  // Block until the daemon thread has finished bringing services up.
+  // RunUntilCompleted posts a single task to the worker pool and waits.
+  async_tg_->RunUntilCompleted([]() { return true; });
 }
 
 void App::Run() {
@@ -208,19 +215,37 @@ void App::Run() {
   // process service
   pre_run();
   LogI("App starting main run loop...");
-  auto t1 = std::make_shared<std::atomic<int64_t>>(steady::GetCurrentMs());
+
+  // Health monitoring: post a heartbeat task to the main runner every
+  // kHeartbeatMs and observe the actual delivery interval. If it drifts
+  // significantly beyond the schedule, the main runner is blocked.
+  constexpr uint32_t kHeartbeatMs = 1000;
+  constexpr int64_t kSlowThresholdMs = 2000;
+  constexpr int64_t kBlockedThresholdMs = 5000;
+  auto last_beat = std::make_shared<std::atomic<int64_t>>(
+      steady::GetCurrentMs());
+  timer_->SetRepeatingTimer(kHeartbeatMs, [this, last_beat]() {
+    Spawn([last_beat, this]() {
+      int64_t now = steady::GetCurrentMs();
+      int64_t prev = last_beat->exchange(now, std::memory_order_relaxed);
+      int64_t delta = now - prev;
+      if (delta > kBlockedThresholdMs) {
+        LogW("main runner blocked: heartbeat delayed %lldms",
+             static_cast<long long>(delta));
+      } else if (delta > kSlowThresholdMs) {
+        LogW("main runner slow: heartbeat delayed %lldms",
+             static_cast<long long>(delta));
+      }
+      if (async_tg_->IsBusy()) {
+        LogD("task group busy, workers=%d", async_tg_->Size());
+      }
+    });
+  });
+
+  // Idle wait until shutdown is requested. Sleep is fine here because the
+  // actual work runs on the main runner thread and the worker pool.
   while (IsOk()) {
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    auto diff_ms = steady::GetCurrentMs() - t1->load(std::memory_order_relaxed);
-    if (diff_ms > 5000) {
-      LogW("main threads blocked, %fms!!!", diff_ms);
-    } else if (diff_ms > 2000) {
-      Spawn([t1]() { t1->store(steady::GetCurrentMs(), std::memory_order_relaxed); });
-    }
-    if (async_tg_->IsBusy()) {
-      LogW("task group is busy, maybe use more threads, cur is: %d!!!",
-           async_tg_->Size());
-    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
   LogI("App shutting down...");
   deinit();

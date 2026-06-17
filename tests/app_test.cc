@@ -55,3 +55,11 @@ TEST_CASE("Ins() returns a valid pointer") {
   App* ins = App::Ins();
   CHECK(ins != nullptr);
 }
+
+TEST_CASE("App accepts threads=1 (single-threaded mode)") {
+  App app;
+  std::vector<std::string> args = {"test_app", "--xtils.threads=1"};
+  // Should not abort/exit.
+  app.Init(args);
+  CHECK(app.Conf().GetOr<int>("xtils.threads") == 1);
+}
