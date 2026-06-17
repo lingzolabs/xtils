@@ -22,28 +22,28 @@ inline char Uppercase(char c) {
   return ('a' <= c && c <= 'z') ? static_cast<char>(c + ('A' - 'a')) : c;
 }
 
-inline std::optional<uint32_t> CStringToUInt32(const char* s, int xtils = 10) {
+inline std::optional<uint32_t> CStringToUInt32(const char* s, int base = 10) {
   char* endptr = nullptr;
-  auto value = static_cast<uint32_t>(strtoul(s, &endptr, xtils));
+  auto value = static_cast<uint32_t>(strtoul(s, &endptr, base));
   return (*s && !*endptr) ? std::make_optional(value) : std::nullopt;
 }
 
-inline std::optional<int32_t> CStringToInt32(const char* s, int xtils = 10) {
+inline std::optional<int32_t> CStringToInt32(const char* s, int base = 10) {
   char* endptr = nullptr;
-  auto value = static_cast<int32_t>(strtol(s, &endptr, xtils));
+  auto value = static_cast<int32_t>(strtol(s, &endptr, base));
   return (*s && !*endptr) ? std::make_optional(value) : std::nullopt;
 }
 
 // Note: it saturates to 7fffffffffffffff if parsing a hex number >= 0x8000...
-inline std::optional<int64_t> CStringToInt64(const char* s, int xtils = 10) {
+inline std::optional<int64_t> CStringToInt64(const char* s, int base = 10) {
   char* endptr = nullptr;
-  auto value = static_cast<int64_t>(strtoll(s, &endptr, xtils));
+  auto value = static_cast<int64_t>(strtoll(s, &endptr, base));
   return (*s && !*endptr) ? std::make_optional(value) : std::nullopt;
 }
 
-inline std::optional<uint64_t> CStringToUInt64(const char* s, int xtils = 10) {
+inline std::optional<uint64_t> CStringToUInt64(const char* s, int base = 10) {
   char* endptr = nullptr;
-  auto value = static_cast<uint64_t>(strtoull(s, &endptr, xtils));
+  auto value = static_cast<uint64_t>(strtoull(s, &endptr, base));
   return (*s && !*endptr) ? std::make_optional(value) : std::nullopt;
 }
 
@@ -58,23 +58,23 @@ inline std::optional<double> CStringToDouble(const char* s) {
 }
 
 inline std::optional<uint32_t> StringToUInt32(const std::string& s,
-                                              int xtils = 10) {
-  return CStringToUInt32(s.c_str(), xtils);
+                                              int base = 10) {
+  return CStringToUInt32(s.c_str(), base);
 }
 
 inline std::optional<int32_t> StringToInt32(const std::string& s,
-                                            int xtils = 10) {
-  return CStringToInt32(s.c_str(), xtils);
+                                            int base = 10) {
+  return CStringToInt32(s.c_str(), base);
 }
 
 inline std::optional<uint64_t> StringToUInt64(const std::string& s,
-                                              int xtils = 10) {
-  return CStringToUInt64(s.c_str(), xtils);
+                                              int base = 10) {
+  return CStringToUInt64(s.c_str(), base);
 }
 
 inline std::optional<int64_t> StringToInt64(const std::string& s,
-                                            int xtils = 10) {
-  return CStringToInt64(s.c_str(), xtils);
+                                            int base = 10) {
+  return CStringToInt64(s.c_str(), base);
 }
 
 inline std::optional<double> StringToDouble(const std::string& s) {
@@ -83,14 +83,14 @@ inline std::optional<double> StringToDouble(const std::string& s) {
 
 template <typename T>
 inline std::optional<T> StringViewToNumber(std::string_view sv,
-                                           int xtils = 10) {
+                                           int base = 10) {
   // std::from_chars() does not regonize the leading '+' character and only
   // recognizes '-' so remove the '+' if it exists to avoid errors and match
   // the behavior of the other string conversion utilities above.
   size_t start_offset = !sv.empty() && sv.at(0) == '+' ? 1 : 0;
   T value;
   auto result =
-      std::from_chars(sv.begin() + start_offset, sv.end(), value, xtils);
+      std::from_chars(sv.begin() + start_offset, sv.end(), value, base);
   if (result.ec == std::errc() && result.ptr == sv.end()) {
     return value;
   } else {
@@ -99,41 +99,41 @@ inline std::optional<T> StringViewToNumber(std::string_view sv,
 }
 
 inline std::optional<uint32_t> StringViewToUInt32(std::string_view sv,
-                                                  int xtils = 10) {
+                                                  int base = 10) {
   // std::from_chars() does not recognize the leading '-' character for
   // unsigned conversions, but strtol does. To Mimic the behavior of strtol,
   // attempt a signed converion if we see a leading '-', and then cast the
   // result back to unsigned.
   if (sv.size() > 0 && sv.at(0) == '-') {
     return static_cast<std::optional<uint32_t> >(
-        StringViewToNumber<int32_t>(sv, xtils));
+        StringViewToNumber<int32_t>(sv, base));
   } else {
-    return StringViewToNumber<uint32_t>(sv, xtils);
+    return StringViewToNumber<uint32_t>(sv, base);
   }
 }
 
 inline std::optional<int32_t> StringViewToInt32(std::string_view sv,
-                                                int xtils = 10) {
-  return StringViewToNumber<int32_t>(sv, xtils);
+                                                int base = 10) {
+  return StringViewToNumber<int32_t>(sv, base);
 }
 
 inline std::optional<uint64_t> StringViewToUInt64(std::string_view sv,
-                                                  int xtils = 10) {
+                                                  int base = 10) {
   // std::from_chars() does not recognize the leading '-' character for
   // unsigned conversions, but strtol does. To Mimic the behavior of strtol,
   // attempt a signed converion if we see a leading '-', and then cast the
   // result back to unsigned.
   if (sv.size() > 0 && sv.at(0) == '-') {
     return static_cast<std::optional<uint64_t> >(
-        StringViewToNumber<int64_t>(sv, xtils));
+        StringViewToNumber<int64_t>(sv, base));
   } else {
-    return StringViewToNumber<uint64_t>(sv, xtils);
+    return StringViewToNumber<uint64_t>(sv, base);
   }
 }
 
 inline std::optional<int64_t> StringViewToInt64(std::string_view sv,
-                                                int xtils = 10) {
-  return StringViewToNumber<int64_t>(sv, xtils);
+                                                int base = 10) {
+  return StringViewToNumber<int64_t>(sv, base);
 }
 
 bool StartsWith(const std::string& str, const std::string& prefix);
