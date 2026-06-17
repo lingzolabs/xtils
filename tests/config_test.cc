@@ -550,3 +550,87 @@ TEST_CASE("Skip config-file reload on second ParseArgs") {
 
   std::remove("test_reload_skip.json");
 }
+
+// ─── Short option aliases ───────────────────────────────────────────────
+
+TEST_CASE("Config short alias: -x value") {
+  Config config;
+  config.Define("port", "Server port", 80); config.Short("port", "p");
+
+  const char* argv[] = {"prog", "-p", "9090"};
+  REQUIRE(config.ParseArgs(3, argv));
+  CHECK(config.GetInt("port").value() == 9090);
+}
+
+TEST_CASE("Config short alias: -x=value") {
+  Config config;
+  config.Define("port", "Server port", 80); config.Short("port", "p");
+
+  const char* argv[] = {"prog", "-p=8081"};
+  REQUIRE(config.ParseArgs(2, argv));
+  CHECK(config.GetInt("port").value() == 8081);
+}
+
+TEST_CASE("Config short alias: compact -xvalue") {
+  Config config;
+  config.Define("config-path", "Path to file", std::string("/tmp/x")); config.Short("config-path", "c");
+
+  const char* argv[] = {"prog", "-c/etc/foo.json"};
+  REQUIRE(config.ParseArgs(2, argv));
+  CHECK(config.GetString("config-path").value() == "/etc/foo.json");
+}
+
+TEST_CASE("Config short alias: bare -x for boolean is true") {
+  Config config;
+  config.Define("verbose", "Verbose mode", false); config.Short("verbose", "v");
+
+  const char* argv[] = {"prog", "-v"};
+  REQUIRE(config.ParseArgs(2, argv));
+  CHECK(config.GetBool("verbose").value() == true);
+}
+
+TEST_CASE("Config short alias: chained booleans -vqf") {
+  Config config;
+  config.Define("verbose", "Verbose mode", false); config.Short("verbose", "v");
+  config.Define("quiet", "Quiet mode", false); config.Short("quiet", "q");
+  config.Define("force", "Force", false); config.Short("force", "f");
+
+  const char* argv[] = {"prog", "-vqf"};
+  REQUIRE(config.ParseArgs(2, argv));
+  CHECK(config.GetBool("verbose").value() == true);
+  CHECK(config.GetBool("quiet").value() == true);
+  CHECK(config.GetBool("force").value() == true);
+}
+
+TEST_CASE("Config short alias: unknown short flag goes to no_parsed_") {
+  Config config;
+  config.Define("verbose", "Verbose", false); config.Short("verbose", "v");
+
+  const char* argv[] = {"prog", "-z"};
+  REQUIRE(config.ParseArgs(2, argv));
+  auto unparsed = config.NoParsed();
+  bool found = false;
+  for (const auto& s : unparsed) {
+    if (s == "-z") {
+      found = true;
+      break;
+    }
+  }
+  CHECK(found);
+}
+
+TEST_CASE("Config short alias: long form still works after Define with short") {
+  Config config;
+  config.Define("port", "Server port", 80); config.Short("port", "p");
+
+  const char* argv[] = {"prog", "--port=7777"};
+  REQUIRE(config.ParseArgs(2, argv));
+  CHECK(config.GetInt("port").value() == 7777);
+}
+
+TEST_CASE("Config short alias: Help() shows both forms") {
+  Config config;
+  config.Define("port", "Server port", 80); config.Short("port", "p");
+  std::string h = config.Help();
+  CHECK(h.find("--port, -p") != std::string::npos);
+}

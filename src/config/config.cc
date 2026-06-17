@@ -39,6 +39,34 @@ Config& Config::Define(const std::string& name, const std::string& description,
   return *this;
 }
 
+Config& Config::Short(const std::string& name,
+                      const std::string& short_alias) {
+  auto it = options_.find(name);
+  if (it == options_.end()) {
+    LogE("Config::Short: unknown option '%s' (call Define first)",
+         name.c_str());
+    return *this;
+  }
+  if (!short_alias.empty() && short_alias.size() != 1) {
+    LogE("Config::Short: short_alias '%s' for --%s must be a single char",
+         short_alias.c_str(), name.c_str());
+    return *this;
+  }
+  // Detect collisions.
+  if (!short_alias.empty()) {
+    for (auto& kv : options_) {
+      if (kv.first != name && kv.second.short_name == short_alias) {
+        LogE("Config::Short: alias '-%s' already used by --%s",
+             short_alias.c_str(), kv.first.c_str());
+        return *this;
+      }
+    }
+  }
+  it->second.short_name = short_alias;
+  return *this;
+}
+
+
 bool Config::ParseArgs(int argc, const char** argv, bool allow_exit) {
   return ParseArgs(std::vector<std::string>(argv, argv + argc), allow_exit);
 }
@@ -50,6 +78,14 @@ bool Config::ParseArgs(const std::vector<std::string>& args, bool allow_exit) {
   apply_defaults();
   no_parsed_.clear();
   no_parsed_.push_back(args[0]);
+
+  // Build short_name -> option name map for fast lookup of '-x' style flags.
+  std::map<std::string, std::string> short_to_long;
+  for (const auto& kv : options_) {
+    if (!kv.second.short_name.empty()) {
+      short_to_long[kv.second.short_name] = kv.first;
+    }
+  }
 
   // First pass: look for --config-file parameter
   std::string config_file;
@@ -116,6 +152,64 @@ bool Config::ParseArgs(const std::vector<std::string>& args, bool allow_exit) {
         key = long_arg;
         // Check if next argument is the value
         if (i + 1 < args.size() && !is_flag(args[i + 1])) {
+          value_str = args[++i];
+          has_value = true;
+        }
+      }
+    } else if (arg.length() >= 2 && arg[0] == '-' && arg[1] != '-') {
+      // Short form: -x, -xvalue, -x=value, -x value, -vqf (chained bool)
+      std::string body = arg.substr(1);  // after the leading '-'
+
+      // Try chained-boolean parse first: every char must map to a known
+      // boolean option. If not, fall through to single-short parsing.
+      bool all_known_bool = !body.empty();
+      for (char c : body) {
+        std::string s(1, c);
+        auto it = short_to_long.find(s);
+        if (it == short_to_long.end()) {
+          all_known_bool = false;
+          break;
+        }
+        auto opt = options_.find(it->second);
+        if (opt == options_.end() ||
+            !opt->second.default_value.is_bool()) {
+          all_known_bool = false;
+          break;
+        }
+      }
+      if (all_known_bool && body.size() > 1) {
+        for (char c : body) {
+          std::string s(1, c);
+          Set(short_to_long[s], Json(true));
+        }
+        continue;
+      }
+
+      // Single-short form. Parse '-x', '-x=value', or compact '-xvalue'.
+      std::string short_key(1, body[0]);
+      auto sit = short_to_long.find(short_key);
+      if (sit == short_to_long.end()) {
+        no_parsed_.push_back(arg);
+        continue;
+      }
+      key = sit->second;
+      if (body.size() > 1) {
+        if (body[1] == '=') {
+          value_str = body.substr(2);
+          has_value = true;
+        } else {
+          value_str = body.substr(1);
+          has_value = true;
+        }
+      } else if (i + 1 < args.size() && !is_flag(args[i + 1])) {
+        // '-x value' (next arg is the value, only if it isn't itself a flag).
+        // For boolean options we still allow taking the next arg if it's a
+        // recognisable bool literal, but the canonical bool form is just '-x'.
+        auto opt = options_.find(key);
+        if (opt != options_.end() && opt->second.default_value.is_bool()) {
+          // bool flag without explicit value -> true
+          // (don't consume next arg)
+        } else {
           value_str = args[++i];
           has_value = true;
         }
@@ -273,6 +367,9 @@ std::string Config::Help() const {
 
   for (const auto& [name, option] : options_) {
     oss << "  --" << option.name;
+    if (!option.short_name.empty()) {
+      oss << ", -" << option.short_name;
+    }
 
     if (option.required) {
       oss << " (required)";

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdio>
 #include <exception>
 #include <map>
 #include <optional>
@@ -26,6 +27,7 @@ class Config {
   // Option definition for command line parsing
   struct Option {
     std::string name;
+    std::string short_name;  // empty means no short flag
     std::string description;
     Json default_value;
     bool required = false;
@@ -37,8 +39,17 @@ class Config {
           description(description),
           default_value(default_value),
           required(required) {}
+    Option(const std::string& name, const std::string& short_name,
+           const std::string& description, const Json& default_value,
+           bool required = false)
+        : name(name),
+          short_name(short_name),
+          description(description),
+          default_value(default_value),
+          required(required) {}
     Option& operator=(const Option& o) {
       this->name = o.name;
+      this->short_name = o.short_name;
       this->description = o.description;
       this->default_value = o.default_value;
       this->required = o.required;
@@ -56,6 +67,12 @@ class Config {
   template <typename T>
   Config& Define(const std::string& name, const std::string& description,
                  const T& default_value, bool required = false);
+
+  // Attach a single-character short alias (e.g. "v" for --verbose) to the
+  // most-recently-defined option named `name`. Pass an empty string to clear.
+  // Designed for chaining: Define("port", "Server port", 80).Short("port", "p")
+  // or, more ergonomically, after defining many options at once.
+  Config& Short(const std::string& name, const std::string& short_alias);
 
   // Loading methods
   // ParseArgs supports --config-file parameter to load configuration file
