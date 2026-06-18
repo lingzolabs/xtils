@@ -10,10 +10,11 @@
 xtils/
 ├── include/xtils/          # Public headers
 │   ├── app/                # App framework (app.h, service.h, auto-gen.h)
-│   ├── config/             # Configuration (config.h)
+│   ├── config/             # Configuration (config.h, config_watcher.h)
 │   ├── debug/              # Debug tools (inspect.h, tracer.h)
 │   ├── fsm/                # State machines (fsm.h, behavior_tree.h, bt_*logger.h)
-│   ├── logging/            # Logging (logger.h, sink.h, watchdog.h)
+│   ├── logging/            # Logging (logger.h, log_builder.h, mdc.h, sink.h, watchdog.h)
+│   ├── metrics/            # Metrics (metrics.h — Counter/Gauge/Histogram + Prometheus exporter)
 │   ├── net/                # Networking
 │   │   ├── transport/      # Transport layer (transport.h, tls_transport.h, mbedtls_transport.h, tls_factory.h, plain_tcp_transport.h)
 │   │   ├── http_client.h   # HTTP client (sync & async; HttpClient::Request/Response)
@@ -30,7 +31,8 @@ xtils/
 │   │   ├── engine.h        # ScriptEngine — runtime management
 │   │   ├── context.h       # ScriptContext — eval, function registration
 │   │   ├── value.h         # ScriptValue — RAII value wrapper
-│   │   ├── binding.h       # C++ → JS value helpers
+│   │   ├── binding.h       # C++ → JS value helpers (free functions)
+│   │   ├── class_binding.h # ClassBinding<T> — register C++ classes into JS
 │   │   └── json_interop.h  # Json ↔ ScriptValue conversion
 │   ├── system/             # OS abstractions (event_fd, paged_memory, platform, signal_handler, unix_socket)
 │   ├── tasks/              # Async & scheduling
@@ -58,8 +60,8 @@ xtils/
 │       ├── time_utils.h     # Time utilities (steady/system clock)
 │       ├── type_traits.h    # Compile-time type name
 │       ├── endianness.h     # Byte order conversion
-│       ├── exception.h      # Exception utilities
-│       └── string_view.h    # string_view helpers
+│       ├── crypto.h         # SHA256, HMAC-SHA1/SHA256, secure RNG, UUID v4
+│       └── exception.h      # Exception utilities
 ├── src/                    # Implementation (.cc files, mirrors include layout)
 ├── tests/                  # Unit tests (*_test.cc, uses doctest)
 ├── examples/               # Usage examples
@@ -77,9 +79,11 @@ system (event_fd, paged_memory, signal_handler, unix_socket, platform)
   ↑
 tasks (task_runner, unix_task_runner, thread_task_runner, task_group, timer, event, cron_scheduler)
   ↑
-config (config.h — depends on json)
+config (config.h, config_watcher.h — depends on json, tasks)
   ↑
-logging (logger, sink, watchdog)
+logging (logger, log_builder, mdc, sink, watchdog)
+  ↑
+metrics (metrics, registry, Prometheus exporter — depends on utils)
   ↑
 net (tcp, udp, http, websocket, ipc — depends on tasks, system, utils)
   ↑

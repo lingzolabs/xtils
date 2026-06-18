@@ -125,6 +125,29 @@ c.Set("token", "secret");
 CHECK(c.Validate());
 ```
 
+### `xtils::ConfigWatcher` — inotify hot-reload
+
+```cpp
+#include "xtils/config/config_watcher.h"
+
+xtils::Config cfg;
+cfg.LoadFile("/etc/app.json");
+
+xtils::ConfigWatcher w(&cfg, &task_runner);
+w.Watch("/etc/app.json", [](xtils::Config& cfg) {
+  LogI("config reloaded; new log level: %lld",
+       cfg.GetInt("log.level").value_or(0));
+});
+// w.Stop() runs in the destructor (RAII).
+```
+
+- Re-loads `config` and invokes the callback on every `IN_CLOSE_WRITE` /
+  `IN_MODIFY` event from the watched file.
+- The callback runs on the supplied `TaskRunner` thread.
+- Calling `Watch()` a second time replaces the previous watch.
+- Returns `false` if `inotify_init1` / `inotify_add_watch` fails (e.g. on a
+  filesystem without inotify support).
+
 ---
 
 ## 3. FSM (`fsm/`)
@@ -351,6 +374,52 @@ Set the log tag per translation unit before including logger.h:
 #define LOG_TAG_STRING "my_module"
 #include "xtils/logging/logger.h"
 ```
+
+### Structured logging — `LogBuilder` (chained API)
+
+```cpp
+#include "xtils/logging/log_builder.h"
+
+// One-line macros build a temporary LogBuilder at the given level.
+LOGI().Field("req_id", id).Field("status", code).Msg("request done");
+LOGW().Field("retry", n).Msg();              // empty body, fields only
+LOGE().Msg("connect failed: %s", err.c_str()); // printf-style body
+LOGD() << ...; // not provided — use Field()/Msg() chain only
+
+// Plain output (default formatter):
+//   2026-06-17 10:30:00 I my_module: request done req_id=abc status=200
+```
+
+Macros: `LOGT() / LOGD() / LOGI() / LOGW() / LOGE()`. Each evaluates to a
+`LogBuilder` temporary; if the logger’s level filters this entry out, all
+`Field()` / `Msg()` calls become cheap no-ops. `Msg()` (or destructor) is
+the terminal action that actually dispatches the line. `LOGT()` is
+level-disabled at runtime unless `ENABLE_TRACE_LOGGING` is defined.
+
+`Field(key, value)` accepts `std::string`, `const char*`, `int`, `int64_t`,
+`unsigned`, `double`, `bool`. MDC entries on the current thread are
+appended after fields (see below).
+
+### MDC — `xtils::logger::Mdc`
+
+```cpp
+#include "xtils/logging/mdc.h"
+
+Mdc::Put("trace_id", trace_id);   // attach to every LOG*() on this thread
+Mdc::Get("trace_id");              // "" if absent
+Mdc::Erase("trace_id");
+Mdc::Clear();
+auto snap = Mdc::Snapshot();      // ordered key/value pairs
+
+// RAII: restore prior value on scope exit.
+{
+  Mdc::Scope s("req_id", req.id);
+  LOGI().Msg("handling");          // … req_id=...
+}                                  // prior value (or none) restored
+```
+
+MDC is **thread-local** and only flows into `LogBuilder` output (the
+classic `LogI/LogD/...` printf-style macros do **not** read MDC).
 
 ### `xtils::logger::Logger`
 
@@ -1109,23 +1178,40 @@ std::optional<double> StringToDouble(str);
 // Also: CStringToUInt32, CStringToInt32, CStringToInt64, CStringToUInt64, CStringToDouble
 // Also: StringViewToInt32, StringViewToUInt64, etc.
 
-// String operations
+// String operations (std::string overloads)
 bool StartsWith(str, prefix);
 bool EndsWith(str, suffix);
-bool Contains(haystack, needle);
+bool StartsWithAny(str, vector<string> prefixes);
+bool Contains(haystack, needle);            // string or single char
 bool CaseInsensitiveEqual(a, b);
 std::string Join(parts, delim);
 std::vector<std::string> SplitString(text, delimiter);
 std::string StripPrefix(str, prefix);
 std::string StripSuffix(str, suffix);
+std::string StripChars(str, chars, char replacement);
 std::string TrimWhitespace(str);
 std::string ToLower(str);
 std::string ToUpper(str);
-std::string ToHex(data, size);
+std::string ToHex(data, size);              // also overload for std::string
+std::string IntToHexString(uint32_t);
+std::string Uint64ToHexString(uint64_t);    // "0x..." prefix
+std::string Uint64ToHexStringNoPrefix(uint64_t);
 std::string ReplaceAll(str, to_replace, replacement);
+size_t      Find(needle_sv, haystack_sv);   // returns std::string::npos if absent
+
+// std::string_view overloads (zero-copy variants)
+bool CaseInsensitiveEq(sv_a, sv_b);
+bool CaseInsensitiveOneOf(sv, vector<sv> others);
+bool StartsWith(sv, sv_prefix);
+bool EndsWith(sv, sv_suffix);
+
+// UTF-8 / line lookup
+bool CheckAsciiAndRemoveInvalidUTF8(sv input, std::string& output);
+std::optional<LineWithOffset> FindLineWithOffset(sv str, uint32_t offset);
+//   LineWithOffset { string_view line; uint32_t line_offset, line_num; }
 
 // Low-level
-void StringCopy(dst, src, dst_size);  // Safe strlcpy
+void StringCopy(dst, src, dst_size);  // Safe strlcpy (no return value)
 size_t SprintfTrunc(dst, dst_size, fmt, ...);
 StackString<N>(fmt, ...);  // Stack-allocated formatted string
 ```
@@ -1140,7 +1226,9 @@ bool readable/writeable/exists/is_file/is_directory(path);
 bool read(path, out_string);
 bool read(path, out_string, max_size);
 bool read_lines(path, out_vec);
+bool read_lines(path, out_vec, max_size);
 bool write(path, content);
+bool write_lines(path, vector<string>& lines);
 bool append(path, content);
 bool mkdir(path);
 std::vector<std::string> list_directory/list_files/list_directories(path);
@@ -1188,6 +1276,33 @@ ScopedDir dir(opendir(...));
 Scoped defer([] { cleanup(); });  // Generic deferred cleanup
 ```
 
+### Crypto
+
+```cpp
+#include "xtils/utils/crypto.h"
+// Namespace: xtils::crypto::
+
+// Hash digests
+std::string Sha256(std::string_view data);          // 32-byte raw
+std::string Sha256Hex(std::string_view data);       // 64 lowercase hex
+
+// HMAC
+std::string HmacSha1(key, msg);                     // 20-byte raw
+std::string HmacSha1Hex(key, msg);
+std::string HmacSha256(key, msg);                   // 32-byte raw
+std::string HmacSha256Hex(key, msg);
+
+// Cryptographically secure random
+bool SecureRandom(void* buf, size_t len);           // aborts on RNG failure
+std::string SecureRandomHex(size_t n_bytes);        // 2*n hex chars
+
+// UUID v4 (RFC 4122)
+std::string Uuid::V4();                             // 36-char canonical form
+```
+
+The backend is the same TLS engine selected via `TLS_BACKEND` (OpenSSL or
+mbedTLS), so no extra dependency is added.
+
 ### Other Utils
 
 | Header | Description |
@@ -1200,4 +1315,99 @@ Scoped defer([] { cleanup(); });  // Generic deferred cleanup
 | `time_utils.h` | `steady::Now()`, `system::GetCurrentUtcMs()`, `common::TimeDiffMs()`, etc. |
 | `type_traits.h` | Compile-time `type_name<T>()` |
 | `exception.h` | Exception utilities |
-| `string_view.h` | string_view helpers |
+
+---
+
+## 11. Metrics (`metrics/`)
+
+Lightweight metrics primitives + Prometheus text exporter. Header:
+`xtils/metrics/metrics.h`. Namespace: `xtils::metrics`.
+
+### Primitives
+
+```cpp
+// Counter — monotonic
+class Counter {
+  void Inc(uint64_t v = 1);
+  uint64_t Value() const;
+};
+
+// Gauge — up/down
+class Gauge {
+  void Set(int64_t v);
+  void Inc(int64_t v = 1);
+  void Dec(int64_t v = 1);
+  int64_t Value() const;
+};
+
+// Histogram — preset buckets, +Inf bucket implicit
+class Histogram {
+  explicit Histogram(std::vector<double> upper_bounds);  // strictly ascending
+  void Observe(double value);
+  struct Snapshot {
+    std::vector<std::pair<double, uint64_t>> buckets;  // cumulative counts
+    uint64_t count;
+    double sum;
+  };
+  Snapshot Snap() const;
+};
+```
+
+All three primitives are thread-safe (`Counter`/`Gauge` use `std::atomic`;
+`Histogram` uses an internal mutex).
+
+### Labelled families
+
+```cpp
+using CounterFamily   = Family<Counter>;
+using GaugeFamily     = Family<Gauge>;
+class HistogramFamily;  // owns its own bucket list
+
+// All families:
+const std::string& Name() const;
+const std::string& Help() const;
+const std::vector<std::string>& LabelNames() const;
+Cell& Labels(const std::vector<std::string>& values);  // get-or-create cell
+std::vector<std::pair<std::vector<std::string>, const Cell*>> All() const;
+```
+
+`Labels({})` (with no labels) returns the singleton cell, which is the
+right thing for unlabelled metrics.
+
+### Registry & exporter
+
+```cpp
+#include "xtils/metrics/metrics.h"
+using namespace xtils::metrics;
+
+MetricRegistry registry;
+
+// Get-or-create families. Repeated calls with the same name return the
+// same family; help/label_names of the first call are kept.
+auto& reqs = registry.Counter(
+    "http_requests_total", "Total HTTP requests", {"method", "status"});
+reqs.Labels({"GET",  "200"}).Inc();
+reqs.Labels({"POST", "500"}).Inc(2);
+
+auto& latency = registry.Histogram(
+    "http_request_seconds", "Request latency",
+    {"method"}, {0.005, 0.01, 0.05, 0.1, 0.5, 1, 2.5, 5, 10});
+latency.Labels({"GET"}).Observe(0.42);
+
+auto& in_flight = registry.Gauge(
+    "http_requests_in_flight", "In-flight requests");
+in_flight.Labels({}).Inc();
+
+// Snapshot for custom exporters (sorted alphabetically by name)
+auto counters   = registry.Counters();
+auto gauges     = registry.Gauges();
+auto histograms = registry.Histograms();
+
+// Built-in Prometheus text exporter
+std::string body = PrometheusExporter::Render(registry);
+// HTTP: Content-Type: text/plain; version=0.0.4
+```
+
+`MetricRegistry` is thread-safe for both registration and snapshot. Render
+whenever a `/metrics` HTTP route is hit — there is no separate scrape
+goroutine.

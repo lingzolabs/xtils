@@ -46,6 +46,10 @@ equivalent (already supported throughout v1.x).
   equivalents.
 - **`fsm`** — `include/xtils/fsm/fsm_compat.h` is **deleted** along with all
   snake_case wrappers in it.
+- **`utils/string_view.h`** — `include/xtils/utils/string_view.h` is **deleted**.
+  The `xtils::StringView` alias is gone; use `std::string_view` directly.
+  Helpers such as `CaseInsensitiveEq`, `StartsWith`, `EndsWith` now live in
+  `xtils/utils/string_utils.h`.
 - **`XTILS_ENABLE_DEPRECATED`** macro is no longer recognised; remove any
   references to it from your build system.
 

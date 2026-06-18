@@ -132,6 +132,59 @@ MakeUndefined(ctx);                // undefined
 MakeNull(ctx);                     // null
 ```
 
+### ClassBinding<T> — register C++ classes into JS
+
+Allows JS code to construct, hold, and call methods on real C++ objects.
+The binding wires up constructors, methods (mutable and `const`),
+properties (with getter / optional setter), and read-only properties via
+a fluent builder.
+
+```cpp
+#include "xtils/scripting/class_binding.h"
+
+struct Counter {
+  Counter() = default;
+  explicit Counter(int initial) : value_(initial) {}
+  int Get() const { return value_; }
+  void Set(int v) { value_ = v; }
+  void Inc() { ++value_; }
+  int  value_ = 0;
+};
+
+ClassBinding<Counter>::Define(*ctx, "Counter")
+    .DefaultConstructor()
+    .Constructor<int>()                          // ctor(int)
+    .Method("inc", &Counter::Inc)
+    .Method("get", &Counter::Get)                // const method
+    .Property("value", &Counter::Get, &Counter::Set)
+    .PropertyReadonly("snapshot", &Counter::Get) // getter only
+    .Register();
+
+ctx->Eval(R"JS(
+  const c = new Counter(10);
+  c.inc();
+  c.value = c.value + 1;       // setter
+  console.log(c.snapshot);     // 12
+)JS");
+```
+
+Builder API (after `ClassBinding<T>::Define(ctx, jsName)`):
+
+| Method | Purpose |
+|--------|---------|
+| `.Constructor<Args...>()` | Register a constructor `T(Args...)` |
+| `.DefaultConstructor()` | Register `T()` |
+| `.Method(name, &T::Foo)` | Register a non-const member function |
+| `.Method(name, &T::Bar /* const */)` | Register a `const` member function |
+| `.Method(name, arg_count, fn)` | Register a custom JS-callable lambda |
+| `.Property(name, getter, setter)` | Read/write property |
+| `.PropertyReadonly(name, getter)` | Read-only property |
+| `.Register()` | Finalize and install the class on the context |
+
+Unwrapping a JS instance back to a C++ pointer is supported via the
+helpers in `class_binding.h` (used internally by method dispatch). The
+class must already have been registered before that helper is called.
+
 ### Json Interop
 
 Seamless conversion between `xtils::Json` and JS objects.
@@ -260,4 +313,5 @@ Json result = EvalWithJson(*ctx, "raw", raw_data, R"JS(
 | `xtils/scripting/context.h` | `ScriptContext` — eval, function registration |
 | `xtils/scripting/value.h` | `ScriptValue` — RAII value wrapper |
 | `xtils/scripting/binding.h` | `ToScriptValue`, `MakeUndefined`, `MakeNull` |
+| `xtils/scripting/class_binding.h` | `ClassBinding<T>` — register C++ classes (constructors, methods, properties) |
 | `xtils/scripting/json_interop.h` | `JsonToScriptValue`, `ScriptValueToJson`, `EvalWithJson`, etc. |
