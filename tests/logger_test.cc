@@ -10,6 +10,15 @@
 
 using namespace xtils::logger;
 
+TEST_CASE("Logger: shutdown cannot lose an idle worker wakeup") {
+  for (int i = 0; i < 1000; ++i) {
+    Logger logger;
+    logger.Shutdown();
+    logger.Shutdown();  // Idempotent, including the destructor's call.
+  }
+  CHECK(true);  // Reaching this point means all worker joins completed.
+}
+
 // ============================================================================
 // Test sink that captures messages in a vector<string>
 // ============================================================================

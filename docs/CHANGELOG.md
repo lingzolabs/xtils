@@ -5,6 +5,34 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ---
 
+## Unreleased
+
+- fix(http): return unfollowed redirects without recursion; strip explicit and
+  default credentials across origins and reject HTTPS-to-HTTP redirects.
+- fix(tls): verify DNS/IP identities with OpenSSL, preserve partial writes, and
+  retry non-blocking handshakes/read/write operations on readiness. Socket BIO
+  writes suppress SIGPIPE without changing process-wide signal handlers.
+- fix(net): add writable watches to built-in runners; bound socket/TLS output
+  queues to 8 MiB, preserve queued SCM_RIGHTS, and drain HTTP output before close.
+  UnixSocket queues also have a configurable send deadline (30 seconds default).
+  File responses queue owned descriptors and stream bounded chunks on writable
+  events, including files larger than the output queue.
+  Custom TaskRunner implementations used for networking must implement
+  `SetFileDescriptorWatchWritable`. TLS changes currently cover OpenSSL only.
+- fix(http): reject duplicate Content-Length, unsupported Transfer-Encoding,
+  invalid header names and non-decimal lengths before dispatching requests.
+- fix(http): initialize transports on the runner and include TLS handshakes in
+  request timeouts; default requests now honor `SetTimeout`. Interpret
+  `SetSSLCertificate` as the trusted CA bundle, not a client certificate.
+- fix(tasks): synchronize repeating timer cancellation and rescheduling; document
+  that cancellation does not join an executing callback.
+- fix(fsm): retain 64-bit steady timestamps in Delay to avoid uptime overflow.
+- fix(logging): synchronize shutdown's wait predicate with the worker mutex to
+  prevent a lost notification and an indefinitely blocked worker join.
+- test(net): add local TLS, redirect, framing, backpressure, descriptor-lifetime
+  and timeout regressions; report individual connection-pool request failures.
+  Synchronize FSM reader startup to remove a Release-only scheduling flake.
+
 ## v2.0.0 — 2026-06
 
 Major release. Tagged after the v1.x deprecation grace period; all snake_case

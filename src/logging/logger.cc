@@ -114,12 +114,15 @@ class Logger::Impl {
   }
 
   void Shutdown() {
-    if (!shutdown_requested_.exchange(true)) {
-      cv_.notify_all();
-      if (worker_thread_.joinable()) {
-        worker_thread_.join();
-      }
+    {
+      // Change the wait predicate under the same mutex as WorkerThread's
+      // cv_.wait. An atomic alone permits notification between its predicate
+      // check and sleep, leaving join() blocked forever.
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      if (shutdown_requested_.exchange(true)) return;
     }
+    cv_.notify_all();
+    if (worker_thread_.joinable()) worker_thread_.join();
   }
 
   size_t GetDroppedCount() const {
