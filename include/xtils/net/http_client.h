@@ -36,7 +36,8 @@ class HttpClient : public TransportEventListener {
     HttpUrl url;
     HttpHeaders headers;
     std::string body;
-    uint32_t timeout_ms = 30000;  // 30 seconds default
+    uint32_t timeout_ms =
+        0;  // Use the client's default (initially 30 seconds).
 
     void AddHeader(const std::string& name, const std::string& value);
     void SetContentType(const std::string& content_type);
@@ -185,6 +186,7 @@ class HttpClient : public TransportEventListener {
 
   // URL parsing and connection.
   bool ConnectToHost(const HttpUrl& url);
+  void ScheduleRequestTimeout();
 
   // Header utilities.
   HttpHeaders MergeHeaders(const HttpHeaders& request_headers);
@@ -220,6 +222,7 @@ class HttpClient : public TransportEventListener {
     bool chunked_encoding = false;
     int chunk_size = -1;
     int redirect_count = 0;
+    bool strip_sensitive_headers = false;
     uint32_t timeout_ms = 0;
     std::atomic<bool> timeout_scheduled{false};
     std::atomic<bool> completed{false};
@@ -242,6 +245,7 @@ class HttpClient : public TransportEventListener {
       chunked_encoding = false;
       chunk_size = -1;
       redirect_count = 0;
+      strip_sensitive_headers = false;
       timeout_ms = 0;
       timeout_scheduled.store(false);
       completed.store(false);

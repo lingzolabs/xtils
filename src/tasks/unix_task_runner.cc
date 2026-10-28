@@ -94,7 +94,9 @@ void UnixTaskRunner::UpdateWatchTasksLocked() {
     PlatformHandle handle = it.first;
     WatchTask& watch_task = it.second;
     watch_task.poll_fd_index = poll_fds_.size();
-    poll_fds_.push_back({handle, POLLIN | POLLHUP, 0});
+    short events = POLLIN;
+    if (watch_task.writable) events |= POLLOUT;
+    poll_fds_.push_back({handle, events, 0});
   }
 }
 
@@ -129,7 +131,9 @@ void UnixTaskRunner::PostFileDescriptorWatches(uint64_t windows_wait_result) {
   TRACE_SCOPE("UnixTaskRunner::PostFileDescriptorWatches");
   for (size_t i = 0; i < poll_fds_.size(); i++) {
     const PlatformHandle handle = poll_fds_[i].fd;
-    if (!(poll_fds_[i].revents & (POLLIN | POLLHUP))) continue;
+    if (!(poll_fds_[i].revents &
+          (POLLIN | POLLOUT | POLLHUP | POLLERR | POLLNVAL)))
+      continue;
     poll_fds_[i].revents = 0;
 
     // The wake-up event is handled inline to avoid an infinite recursion of
@@ -247,6 +251,20 @@ void UnixTaskRunner::AddFileDescriptorWatch(PlatformHandle fd,
     watch_tasks_changed_ = true;
   }
   WakeUp();
+}
+
+bool UnixTaskRunner::SetFileDescriptorWatchWritable(PlatformHandle fd,
+                                                    bool enabled) {
+  {
+    std::lock_guard<std::mutex> lock(lock_);
+    auto it = watch_tasks_.find(fd);
+    if (it == watch_tasks_.end()) return false;
+    if (it->second.writable == enabled) return true;
+    it->second.writable = enabled;
+    watch_tasks_changed_ = true;
+  }
+  WakeUp();
+  return true;
 }
 
 void UnixTaskRunner::RemoveFileDescriptorWatch(PlatformHandle fd) {

@@ -5,6 +5,7 @@
 #include <string>
 #include <thread>
 
+#include "net_test_server.h"
 #include "xtils/net/http_server.h"
 #include "xtils/tasks/thread_task_runner.h"
 
@@ -163,6 +164,49 @@ TEST_CASE("HttpClient::Request: multipart body") {
   CHECK(req.multipart_fields.size() == 1);
   CHECK(req.multipart_fields[0].name == "field1");
   CHECK(req.multipart_fields[0].value == "value1");
+}
+
+TEST_CASE("HttpClient: cross-origin redirects strip explicit credentials") {
+  NetTestServer target([](int fd) {
+    auto headers = NetTestServer::ReadHeaders(fd);
+    NetTestServer::Reply(fd, "HTTP/1.1 200 OK\r\nContent-Length: " +
+                                 std::to_string(headers.size()) + "\r\n\r\n" +
+                                 headers);
+  });
+  NetTestServer source([&](int fd) {
+    NetTestServer::ReadHeaders(fd);
+    NetTestServer::Reply(fd, "HTTP/1.1 302 Found\r\nLocation: " + target.Url() +
+                                 "\r\nContent-Length: 0\r\n\r\n");
+  });
+  auto runner = ThreadTaskRunner::CreateAndStart("redirect_credentials");
+  HttpClient client(&runner);
+  HttpClient::Request request;
+  request.url = HttpUrl(source.Url());
+  HttpHeaders credentials = {{"aUtHoRiZaTiOn", "Bearer secret"},
+                             {"cOoKiE", "session=secret"},
+                             {"Proxy-Authorization", "Basic secret"},
+                             {"X-Public", "preserved"}};
+  SUBCASE("request headers") { request.headers = credentials; }
+  SUBCASE("default headers") { client.SetDefaultHeaders(credentials); }
+  auto response = client.Send(request);
+  CHECK(response.status_code == 200);
+  CHECK(response.body.find("secret") == std::string::npos);
+  CHECK(response.body.find("X-Public: preserved") != std::string::npos);
+}
+
+TEST_CASE("HttpClient: disabled redirects return the original response") {
+  NetTestServer server([](int fd) {
+    NetTestServer::ReadHeaders(fd);
+    NetTestServer::Reply(fd,
+                         "HTTP/1.1 302 Found\r\nLocation: /next\r\n"
+                         "Content-Length: 4\r\n\r\nbody");
+  });
+  auto runner = ThreadTaskRunner::CreateAndStart("redirect_test");
+  HttpClient client(&runner);
+  client.SetFollowRedirects(false);
+  auto response = client.Get(server.Url());
+  CHECK(response.status_code == 302);
+  CHECK(response.body == "body");
 }
 
 TEST_CASE("HttpClient: sync invalid URL returns without deadlock") {

@@ -1,8 +1,10 @@
 #include "xtils/net/http_server.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #include <array>
 #include <cctype>
-#include <fstream>
 #include <vector>
 
 #include "xtils/logging/logger.h"
@@ -158,6 +160,7 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
   bool has_origin = false;
   HttpServerRequest http_req(conn);
   size_t body_size = 0;
+  bool has_content_length = false;
   conn->origin_allowed_.clear();
   LogT("%s", std::string(buf_view).c_str());
 
@@ -197,6 +200,18 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
         return 0;
       }
       auto hdr_name = line.substr(0, col);
+      const auto is_token = [](unsigned char ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') ||
+               (ch >= 'a' && ch <= 'z') ||
+               std::string_view("!#$%&'*+-.^_`|~").find(ch) !=
+                   std::string_view::npos;
+      };
+      if (hdr_name.empty() ||
+          !std::all_of(hdr_name.begin(), hdr_name.end(), is_token)) {
+        conn->SendResponseAndClose("400 Bad Request", {},
+                                   "Invalid header name");
+        return 0;
+      }
       std::string hdr_value_storage =
           TrimWhitespace(std::string(line.substr(col + 1)));
       if (http_req.num_headers >= http_req.headers.size()) {
@@ -208,13 +223,23 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
       stored_header = {std::string(hdr_name), std::move(hdr_value_storage)};
       std::string_view hdr_value(stored_header.value);
 
-      if (CaseInsensitiveEq(hdr_name, "content-length")) {
+      if (CaseInsensitiveEq(hdr_name, "transfer-encoding")) {
+        // Chunked request bodies are not implemented. Never silently interpret
+        // their bytes as another pipelined request (including TE + CL).
+        conn->SendResponseAndClose("400 Bad Request", {},
+                                   "Transfer-Encoding is not supported");
+        return 0;
+      } else if (CaseInsensitiveEq(hdr_name, "content-length")) {
         auto parsed = StringViewToUInt64(hdr_value);
-        if (!parsed) {
+        if (has_content_length || hdr_value.empty() ||
+            !std::all_of(hdr_value.begin(), hdr_value.end(),
+                         [](char ch) { return ch >= '0' && ch <= '9'; }) ||
+            !parsed || *parsed > SIZE_MAX) {
           conn->SendResponseAndClose("400 Bad Request", {},
                                      "Invalid Content-Length");
           return 0;
         }
+        has_content_length = true;
         body_size = static_cast<size_t>(*parsed);
       } else if (CaseInsensitiveEq(hdr_name, "origin")) {
         has_origin = true;
@@ -236,8 +261,8 @@ size_t HttpServer::ParseOneHttpRequest(HttpServerConnection* conn) {
 
   const size_t max_request_size = conn->max_request_size();
   const size_t max_payload_size = max_request_size - 4096;
-  if (body_size + headers_size >= max_request_size ||
-      body_size > max_payload_size) {
+  if (headers_size >= max_request_size || body_size > max_payload_size ||
+      body_size >= max_request_size - headers_size) {
     conn->SendResponseAndClose("413 Payload Too Large");
     return 0;
   }
@@ -498,8 +523,7 @@ void HttpServerConnection::SendResponseHeaders(const char* http_code,
     append("Vary: Origin\r\n");
   }
   append("\r\n");  // End-of-headers marker.
-  sock->Send(resp_hdr.data(),
-             resp_hdr.size());  // Send response headers.
+  if (!sock->Send(resp_hdr.data(), resp_hdr.size())) sock->Shutdown(true);
 }
 
 void HttpServerConnection::SendResponseBody(const void* data, size_t len) {
@@ -511,10 +535,12 @@ void HttpServerConnection::SendResponseBody(const void* data, size_t len) {
   content_len_actual_ += len;
   XTILS_CHECK(content_len_actual_ <= content_len_headers_ ||
               content_len_headers_ == kOmitContentLength);
-  sock->Send(data, len);
+  if (!sock->Send(data, len)) sock->Shutdown(true);
 }
 
-void HttpServerConnection::Close() { sock->Shutdown(/*notify=*/true); }
+void HttpServerConnection::Close() {
+  sock->ShutdownAfterFlush(/*notify=*/true);
+}
 
 void HttpServerConnection::SendResponse(const char* http_code,
                                         const HttpHeaders& headers,
@@ -529,39 +555,25 @@ void HttpServerConnection::SendResponse(const char* http_code,
 bool HttpServerConnection::SendFileStreaming(const std::string& file_path,
                                              const char* http_code,
                                              const HttpHeaders& headers) {
-  std::ifstream file(file_path, std::ios::binary | std::ios::ate);
-  if (!file.is_open()) {
+  ScopedFile file(open(file_path.c_str(), O_RDONLY | O_CLOEXEC));
+  struct stat info {};
+  if (!file || fstat(file.get(), &info) != 0 || !S_ISREG(info.st_mode) ||
+      info.st_size < 0 || static_cast<uint64_t>(info.st_size) > SIZE_MAX) {
     LogE("[HTTP] Failed to open file for streaming: %s", file_path.c_str());
     return false;
   }
-
-  auto pos = file.tellg();
-  if (pos < 0) return false;
-  const size_t file_size = static_cast<size_t>(pos);
-  file.seekg(0, std::ios::beg);
-
+  const size_t file_size = static_cast<size_t>(info.st_size);
   SendResponseHeaders(http_code, headers, file_size);
-
-  constexpr size_t kChunkSize = 64 * 1024;  // 64KB
-  std::array<char, kChunkSize> buf;
-  size_t remaining = file_size;
-
-  while (remaining > 0) {
-    size_t to_read = std::min(remaining, kChunkSize);
-    file.read(buf.data(), static_cast<std::streamsize>(to_read));
-    size_t bytes_read = static_cast<size_t>(file.gcount());
-    if (bytes_read == 0) break;
-    SendResponseBody(buf.data(), bytes_read);
-    remaining -= bytes_read;
-  }
-
-  if (remaining > 0) {
-    LogE("[HTTP] Streaming file read truncated: %s", file_path.c_str());
+  // Queue the descriptor, not the entire file. Writable events stream bounded
+  // chunks, so slow downloads never block the runner waiting for socket space.
+  if (!sock->SendFile(file.get(), file_size)) {
+    sock->Shutdown(true);
+  } else {
+    content_len_actual_ = file_size;
     if (!keepalive_) Close();
-    return false;
   }
-
-  if (!keepalive_) Close();
+  // A response has started. Errors after this point close the connection;
+  // callers must not attempt to send a second set of response headers.
   return true;
 }
 
@@ -580,7 +592,7 @@ void HttpServerConnection::SendWebsocketFrame(WebSocketOpcode opcode,
 
   auto frame_data = WebSocketUtils::BuildFrame(
       opcode, payload, payload_len, true /* fin */, false /* mask */);
-  sock->Send(frame_data.data(), frame_data.size());
+  if (!sock->Send(frame_data.data(), frame_data.size())) sock->Shutdown(true);
 }
 
 HttpServerConnection::HttpServerConnection(std::unique_ptr<UnixSocket> s,

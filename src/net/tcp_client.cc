@@ -1,5 +1,6 @@
 #include "xtils/net/tcp_client.h"
 
+#include <future>
 #include <sstream>
 
 namespace xtils {
@@ -14,6 +15,14 @@ TcpClient::TcpClient(TaskRunner* task_runner, TcpClientEventListener* listener)
 TcpClient::~TcpClient() { Disconnect(); }
 
 bool TcpClient::Connect(const std::string& address, uint16_t port) {
+  if (!task_runner_->RunsTasksOnCurrentThread()) {
+    // Install the socket before its connect callback can be dispatched.
+    auto connect = std::make_shared<std::packaged_task<bool()>>(
+        [this, address, port] { return Connect(address, port); });
+    auto result = connect->get_future();
+    task_runner_->PostTask([connect] { (*connect)(); });
+    return result.get();
+  }
   if (state_ != State::kDisconnected) {
     return false;
   }
@@ -41,7 +50,7 @@ bool TcpClient::Connect(const std::string& address, uint16_t port) {
   socket_ = UnixSocket::Connect(socket_addr, this, task_runner_, family,
                                 SockType::kStream);
 
-  if (!socket_ && !socket_->is_connected()) {
+  if (!socket_) {
     HandleError("Failed to create socket");
     return false;
   }
@@ -95,6 +104,10 @@ SocketHandle TcpClient::GetSocketFd() const {
     return -1;
   }
   return socket_->fd();
+}
+
+bool TcpClient::SetWritableInterest(bool enabled) {
+  return socket_ && socket_->SetWritableInterest(enabled);
 }
 
 void TcpClient::SetConnectTimeout(uint32_t timeout_ms) {

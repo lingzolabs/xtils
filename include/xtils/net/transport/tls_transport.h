@@ -3,7 +3,9 @@
 
 #include <openssl/ssl.h>
 
+#include <array>
 #include <atomic>
+#include <deque>
 #include <memory>
 
 #include "xtils/net/tcp_client.h"
@@ -61,6 +63,10 @@ class TlsTransport final : public Transport, public TcpClientEventListener {
   ~TlsTransport() override;
 
   bool Connect(const HttpUrl& url, TlsContextPtr ctx) override;
+  // Non-blocking, bounded 8 MiB / 1024-record queue. false on backpressure
+  // or TLS failure. Send accepts either the whole buffer or none on capacity
+  // rejection; callers must retry later or close on false.
+  // All transport methods and destruction must run on the supplied runner.
   bool Send(const void* data, size_t len) override;
   void Close() override;
 
@@ -74,6 +80,8 @@ class TlsTransport final : public Transport, public TcpClientEventListener {
 
   void ContinueHandshake();
   void DrainSSLRead();
+  bool FlushWrites();
+  bool WaitForIO(int ssl_error);
   void Fail(const std::string& reason);
 
  private:
@@ -87,6 +95,13 @@ class TlsTransport final : public Transport, public TcpClientEventListener {
   std::atomic<TLSState> state_;
 
   std::string host_;
+  std::deque<std::string> pending_writes_;
+  size_t write_offset_ = 0;
+  size_t queued_bytes_ = 0;
+  bool read_wants_write_ = false;
+  bool write_wants_write_ = false;
+  std::array<uint8_t, 16384> read_buffer_{};
+  WeakPtrFactory<TlsTransport> weak_factory_{this};
 };
 
 }  // namespace xtils

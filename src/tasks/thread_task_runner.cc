@@ -89,6 +89,11 @@ void ThreadTaskRunner::AddFileDescriptorWatch(
   task_runner_->AddFileDescriptorWatch(handle, std::move(watch_task));
 }
 
+bool ThreadTaskRunner::SetFileDescriptorWatchWritable(PlatformHandle handle,
+                                                      bool enabled) {
+  return task_runner_->SetFileDescriptorWatchWritable(handle, enabled);
+}
+
 void ThreadTaskRunner::RemoveFileDescriptorWatch(PlatformHandle handle) {
   task_runner_->RemoveFileDescriptorWatch(handle);
 }

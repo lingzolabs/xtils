@@ -428,35 +428,6 @@ void HttpClient::OnConnected(bool success) {
 
   state_.store(State::kSendingRequest);
 
-  // Schedule timeout
-  if (current_.timeout_ms > 0 && !current_.timeout_scheduled.exchange(true)) {
-    auto lifetime = lifetime_;
-    const uint64_t generation = active_request_generation_.load();
-    task_runner_->PostDelayedTask(
-        [this, lifetime, generation]() {
-          {
-            std::lock_guard<std::mutex> lock(lifetime->mutex);
-            if (!lifetime->alive) return;
-            ++lifetime->active_callbacks;
-            lifetime->callback_thread = std::this_thread::get_id();
-          }
-          Scoped callback_guard([lifetime]() {
-            std::lock_guard<std::mutex> lock(lifetime->mutex);
-            if (lifetime->active_callbacks > 0) --lifetime->active_callbacks;
-            if (lifetime->active_callbacks == 0) {
-              lifetime->callback_thread = std::thread::id();
-              lifetime->cv.notify_all();
-            }
-          });
-
-          if (active_request_generation_.load() == generation && IsBusy() &&
-              !current_.completed.load()) {
-            HandleError("Request timeout");
-          }
-        },
-        current_.timeout_ms);
-  }
-
   // Send the HTTP request
   if (!SendHttpRequest(current_.request)) {
     HandleError("Failed to send HTTP request");
@@ -516,6 +487,12 @@ std::string HttpClient::BuildHttpRequest(const HttpClient::Request& request) {
   // Merge and add headers
   HttpHeaders merged_headers = MergeHeaders(request.headers);
   for (const auto& header : merged_headers) {
+    if (current_.strip_sensitive_headers &&
+        (CaseInsensitiveEqual(header.name, "Authorization") ||
+         CaseInsensitiveEqual(header.name, "Proxy-Authorization") ||
+         CaseInsensitiveEqual(header.name, "Cookie") ||
+         CaseInsensitiveEqual(header.name, "Host")))
+      continue;
     oss << header.name << ": " << header.value << "\r\n";
   }
 
@@ -815,11 +792,6 @@ void HttpClient::ProcessFixedLengthBody() {  // Call body data callback if in
 }
 
 void HttpClient::HandleRedirect() {
-  if (!follow_redirects_) {
-    CompleteRequest();
-    return;
-  }
-
   if (current_.redirect_count >= max_redirects_) {
     HandleError("Too many redirects");
     return;
@@ -852,6 +824,19 @@ void HttpClient::HandleRedirect() {
     return;
   }
 
+  const auto& old_url = current_.request.url;
+  if (old_url.IsHttps() && !new_url.IsHttps()) {
+    HandleError("Refusing insecure TLS redirect");
+    return;
+  }
+  if (!CaseInsensitiveEqual(old_url.scheme, new_url.scheme) ||
+      !CaseInsensitiveEqual(old_url.host, new_url.host) ||
+      old_url.port != new_url.port) {
+    // Also filter default headers, without changing defaults for future
+    // requests.
+    current_.strip_sensitive_headers = true;
+  }
+
   // Update request URL
   current_.request.url = new_url;
 
@@ -878,7 +863,7 @@ void HttpClient::HandleRedirect() {
 
 void HttpClient::CompleteRequest() {
   // Handle redirects
-  if (current_.response.IsRedirect()) {
+  if (follow_redirects_ && current_.response.IsRedirect()) {
     HandleRedirect();
     return;
   }
@@ -894,6 +879,9 @@ void HttpClient::CompleteRequest() {
     }
   }
 
+  // Connections are recreated for each request. Stop old callbacks before
+  // publishing completion to a caller that can immediately reuse this client.
+  if (transport_) transport_->Close();
   last_response_ = current_.response;
   HttpClient::Response response = current_.response;
   HttpClient::Listener* listener = listener_;
@@ -939,6 +927,7 @@ void HttpClient::HandleError(const std::string& error) {
   }
 
   state_.store(State::kError);
+  if (transport_) transport_->Close();
   current_.response.status_code = 0;
   current_.response.status_message = error;
 
@@ -979,22 +968,78 @@ void HttpClient::HandleError(const std::string& error) {
   }
 }
 
+void HttpClient::ScheduleRequestTimeout() {
+  // Schedule timeout
+  if (current_.timeout_ms > 0 && !current_.timeout_scheduled.exchange(true)) {
+    auto lifetime = lifetime_;
+    const uint64_t generation = active_request_generation_.load();
+    task_runner_->PostDelayedTask(
+        [this, lifetime, generation]() {
+          {
+            std::lock_guard<std::mutex> lock(lifetime->mutex);
+            if (!lifetime->alive) return;
+            ++lifetime->active_callbacks;
+            lifetime->callback_thread = std::this_thread::get_id();
+          }
+          Scoped callback_guard([lifetime]() {
+            std::lock_guard<std::mutex> lock(lifetime->mutex);
+            if (lifetime->active_callbacks > 0) --lifetime->active_callbacks;
+            if (lifetime->active_callbacks == 0) {
+              lifetime->callback_thread = std::thread::id();
+              lifetime->cv.notify_all();
+            }
+          });
+
+          if (active_request_generation_.load() == generation && IsBusy() &&
+              !current_.completed.load()) {
+            HandleError("Request timeout");
+          }
+        },
+        current_.timeout_ms);
+  }
+}
+
 bool HttpClient::ConnectToHost(const HttpUrl& url) {
   state_ = State::kConnecting;
-
-  if (url.IsHttps()) {
-    transport_ = CreateTlsTransport(task_runner_, this);
-  } else {  // default to plain TCP
-    transport_ = std::make_unique<PlainTcpTransport>(task_runner_, this);
-  }
-  TlsCertConfig cfg = TlsCertConfig::Default();
-  if (!verify_ssl_) {
-    cfg = TlsCertConfig::Insecure();
-  } else if (!ssl_cert_path_.empty()) {
-    cfg.cert_file = ssl_cert_path_;
-  }
-  auto tls = CreateTlsContext(cfg);
-  return transport_->Connect(url, tls);
+  auto lifetime = lifetime_;
+  const uint64_t generation = active_request_generation_.load();
+  // Socket construction and replacement must run on the runner. Otherwise a
+  // connection callback can run before TcpClient has installed its socket.
+  // Deferral also lets the old transport's redirect callback unwind first.
+  task_runner_->PostTask([this, lifetime, generation, url] {
+    {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (!lifetime->alive) return;
+      ++lifetime->active_callbacks;
+      lifetime->callback_thread = std::this_thread::get_id();
+    }
+    Scoped guard([lifetime] {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (--lifetime->active_callbacks == 0) {
+        lifetime->callback_thread = std::thread::id();
+        lifetime->cv.notify_all();
+      }
+    });
+    if (active_request_generation_.load() != generation ||
+        current_.completed.load())
+      return;
+    ScheduleRequestTimeout();  // Includes TCP connection and TLS handshake.
+    if (url.IsHttps()) {
+      transport_ = CreateTlsTransport(task_runner_, this);
+    } else {
+      transport_ = std::make_unique<PlainTcpTransport>(task_runner_, this);
+    }
+    TlsCertConfig cfg = TlsCertConfig::Default();
+    if (!verify_ssl_) {
+      cfg = TlsCertConfig::Insecure();
+    } else if (!ssl_cert_path_.empty()) {
+      cfg.ca_file = ssl_cert_path_;
+    }
+    auto tls = url.IsHttps() ? CreateTlsContext(cfg) : nullptr;
+    if (!transport_->Connect(url, tls))
+      HandleError("Failed to initiate connection");
+  });
+  return true;
 }
 
 HttpHeaders HttpClient::MergeHeaders(const HttpHeaders& request_headers) {

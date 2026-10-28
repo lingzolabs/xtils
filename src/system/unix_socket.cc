@@ -394,6 +394,7 @@ ssize_t UnixSocketRaw::SendMsgAllPosix(struct msghdr* msg) {
   ssize_t total_sent = 0;
   while (msg->msg_iov) {
     ssize_t send_res = sendmsg(*fd_, msg, send_flags);
+    if (send_res < 0 && errno == EINTR) continue;
     if (send_res == -1 && IsAgain(errno)) {
       if (is_blocking_with_timeout && poll_or_timeout()) {
         continue;  // Tx buffer unblocked, repeat the loop.
@@ -706,6 +707,11 @@ void UnixSocket::DoConnect(const std::string& socket_name) {
   // At this point either connect() succeeded or started asynchronously
   // (errno = EINPROGRESS).
   state_ = State::kConnecting;
+  if (!task_runner_->SetFileDescriptorWatchWritable(sock_raw_.watch_handle(),
+                                                    true)) {
+    NotifyConnectionState(false);
+    return;
+  }
 
   // Even if the socket is non-blocking, connecting to a UNIX socket can be
   // acknowledged straight away rather than returning EINPROGRESS.
@@ -733,10 +739,20 @@ void UnixSocket::OnEvent() {
   if (state_ == State::kDisconnected)
     return;  // Some spurious event, typically queued just before Shutdown().
 
-  if (state_ == State::kConnected)
-    return event_listener_->OnDataAvailable(this);
+  if (state_ == State::kConnected) {
+    if (!FlushPendingWrites() || state_ != State::kConnected) return;
+    pollfd ready{sock_raw_.fd(), POLLIN, 0};
+    poll(&ready, 1, 0);
+    if (writable_interest_ || (ready.revents & (POLLIN | POLLHUP | POLLERR)))
+      event_listener_->OnDataAvailable(this);
+    return;
+  }
 
   if (state_ == State::kConnecting) {
+    // SO_ERROR can be zero while connect is still in progress. Only inspect
+    // completion after readiness; the initial posted event may be premature.
+    pollfd ready{sock_raw_.fd(), POLLIN | POLLOUT, 0};
+    if (poll(&ready, 1, 0) <= 0) return;
     // XTILS_DCHECK(sock_raw_);
     int res = 0, sock_err = 0;
     bool is_error_opt_supported = true;
@@ -752,6 +768,7 @@ void UnixSocket::OnEvent() {
       if (peer_cred_mode_ == SockPeerCredMode::kReadOnConnect)
         ReadPeerCredentialsPosix();
       state_ = State::kConnected;
+      UpdateWritableInterest();
       return event_listener_->OnConnect(this, true /* connected */);
     }
     // DLOG("Connection error: %s", strerror(sock_err));
@@ -775,33 +792,158 @@ void UnixSocket::OnEvent() {
 }
 bool UnixSocket::Send(const void* msg, size_t len, const int* send_fds,
                       size_t num_fds) {
-  if (state_ != State::kConnected) {
+  std::lock_guard<std::recursive_mutex> lock(send_mutex_);
+  if (state_ != State::kConnected || close_after_flush_) {
     errno = ENOTCONN;
     return false;
   }
-
-  sock_raw_.SetBlocking(true);
-  const ssize_t sz = sock_raw_.Send(msg, len, send_fds, num_fds);
-  sock_raw_.SetBlocking(false);
-
-  if (sz == static_cast<ssize_t>(len)) {
-    return true;
+  constexpr size_t kMaxQueuedBytes = 8 * 1024 * 1024;
+  if (len > kMaxQueuedBytes - queued_bytes_ || pending_writes_.size() >= 1024) {
+    errno = EAGAIN;
+    return false;
   }
+  if ((len && !msg) || num_fds > 32 || (num_fds && !send_fds)) {
+    errno = EINVAL;
+    return false;
+  }
+  if (len == 0 && sock_raw_.type() == SockType::kStream) return num_fds == 0;
+  PendingWrite write;
+  if (len > 0) write.data.assign(static_cast<const char*>(msg), len);
+  for (size_t i = 0; i < num_fds; ++i) {
+    int fd = fcntl(send_fds[i], F_DUPFD_CLOEXEC, 0);
+    if (fd < 0) return false;
+    write.fds.emplace_back(fd);
+  }
+  const bool was_empty = pending_writes_.empty();
+  pending_writes_.push_back(std::move(write));
+  queued_bytes_ += len;
+  if (!FlushPendingWrites()) return false;
+  ArmWriteTimeout(was_empty);
+  return true;
+}
 
-  // If we ever decide to support non-blocking sends again, here we should
-  // watch for both EAGAIN and EWOULDBLOCK (see xtils::IsAgain()).
+bool UnixSocket::SendFile(int fd, size_t len) {
+  std::lock_guard<std::recursive_mutex> lock(send_mutex_);
+  if (state_ != State::kConnected || close_after_flush_ ||
+      sock_raw_.type() != SockType::kStream)
+    return false;
+  if (pending_writes_.size() >= 1024) {
+    errno = EAGAIN;
+    return false;
+  }
+  if (len == 0) return true;
+  PendingWrite write;
+  write.file.reset(fcntl(fd, F_DUPFD_CLOEXEC, 0));
+  if (!write.file) return false;
+  write.file_size = len;
+  bool was_empty = pending_writes_.empty();
+  pending_writes_.push_back(std::move(write));
+  if (!FlushPendingWrites()) return false;
+  ArmWriteTimeout(was_empty);
+  return true;
+}
 
-  // If sendmsg() succeeds but the returned size is >= 0 and < |len| it means
-  // that the endpoint disconnected in the middle of the read, and we managed
-  // to send only a portion of the buffer.
-  // If sz < 0, either the other endpoint disconnected (ECONNRESET) or some
-  // other error happened. In both cases we should just give up.
-  // DPLOG("sendmsg() failed");
-  Shutdown(true);
-  return false;
+void UnixSocket::ArmWriteTimeout(bool was_empty) {
+  if (was_empty && !pending_writes_.empty() && tx_timeout_ms_ > 0) {
+    const auto generation = ++write_generation_;
+    auto weak = weak_ptr_factory_.GetWeakPtr();
+    task_runner_->PostDelayedTask(
+        [weak, generation] {
+          if (!weak) return;
+          std::lock_guard<std::recursive_mutex> lock(weak->send_mutex_);
+          if (weak->write_generation_ == generation &&
+              !weak->pending_writes_.empty())
+            weak->Shutdown(true);
+        },
+        tx_timeout_ms_);
+  }
+}
+
+bool UnixSocket::SetWritableInterest(bool enabled) {
+  std::lock_guard<std::recursive_mutex> lock(send_mutex_);
+  writable_interest_ = enabled;
+  return UpdateWritableInterest();
+}
+
+bool UnixSocket::UpdateWritableInterest() {
+  return task_runner_->SetFileDescriptorWatchWritable(
+      sock_raw_.watch_handle(), writable_interest_ || !pending_writes_.empty());
+}
+
+bool UnixSocket::FlushPendingWrites() {
+  std::lock_guard<std::recursive_mutex> lock(send_mutex_);
+  // Bound each turn so large sends cannot starve timers and other sockets.
+  size_t budget = 256 * 1024;
+  while (!pending_writes_.empty() && budget > 0) {
+    auto& write = pending_writes_.front();
+    std::vector<int> fds;
+    for (const auto& fd : write.fds) fds.push_back(fd.get());
+    size_t total = write.file ? write.file_size : write.data.size();
+    size_t count = total - write.offset;
+    if (sock_raw_.type() == SockType::kStream) count = std::min(count, budget);
+    if (write.file && write.data.empty()) {
+      write.data.resize(std::min(count, size_t{64 * 1024}));
+      ssize_t n;
+      do {
+        n = pread(write.file.get(), write.data.data(), write.data.size(),
+                  static_cast<off_t>(write.offset));
+      } while (n < 0 && errno == EINTR);
+      if (n <= 0) {  // Read error or file truncated after headers were sent.
+        Shutdown(true);
+        return false;
+      }
+      write.data.resize(static_cast<size_t>(n));
+    }
+    if (write.file) count = std::min(count, write.data.size());
+    const char* data = write.data.data() + (write.file ? 0 : write.offset);
+    errno = 0;
+    auto n = sock_raw_.Send(data, count, fds.data(), fds.size());
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      if (IsAgain(errno)) break;
+      Shutdown(true);
+      return false;
+    }
+    if (n == 0 && (count != 0 || IsAgain(errno))) break;
+    // SCM_RIGHTS accompanies only the first successful write.
+    write.fds.clear();
+    write.offset += static_cast<size_t>(n);
+    if (write.file) {
+      write.data.erase(0, static_cast<size_t>(n));
+    } else {
+      queued_bytes_ -= static_cast<size_t>(n);
+    }
+    budget -= std::min(budget, static_cast<size_t>(n));
+    if (write.offset == total) pending_writes_.pop_front();
+  }
+  if (pending_writes_.empty()) {
+    ++write_generation_;
+    if (close_after_flush_) {
+      Shutdown(close_notify_);
+      return true;
+    }
+  }
+  if (!UpdateWritableInterest() && !pending_writes_.empty()) {
+    Shutdown(true);
+    return false;
+  }
+  return true;
+}
+
+void UnixSocket::ShutdownAfterFlush(bool notify) {
+  std::lock_guard<std::recursive_mutex> lock(send_mutex_);
+  close_after_flush_ = true;
+  close_notify_ = notify;
+  FlushPendingWrites();
 }
 
 void UnixSocket::Shutdown(bool notify) {
+  std::lock_guard<std::recursive_mutex> lock(send_mutex_);
+  pending_writes_.clear();
+  queued_bytes_ = 0;
+  ++write_generation_;
+  writable_interest_ = false;
+  close_after_flush_ = false;
   auto weak_ptr = weak_ptr_factory_.GetWeakPtr();
   if (notify) {
     if (state_ == State::kConnected) {

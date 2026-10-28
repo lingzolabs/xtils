@@ -3,9 +3,12 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "xtils/tasks/task_runner.h"
 #include "xtils/utils/scoped.h"
@@ -261,19 +264,34 @@ class UnixSocket {
   // stops listening. The socket goes back to kNotInitialized state, so it can
   // be reused with Listen() or Connect().
   void Shutdown(bool notify);
+  // Stop accepting sends; close after queued bytes drain (or write timeout).
+  void ShutdownAfterFlush(bool notify);
 
-  void SetTxTimeout(uint32_t timeout_ms) { sock_raw_.SetTxTimeout(timeout_ms); }
+  // Request write readiness notifications through OnDataAvailable (TLS).
+  bool SetWritableInterest(bool enabled);
+
+  void SetTxTimeout(uint32_t timeout_ms) {
+    tx_timeout_ms_ = timeout_ms;
+    sock_raw_.SetTxTimeout(timeout_ms);
+  }
   void SetRxTimeout(uint32_t timeout_ms) { sock_raw_.SetRxTimeout(timeout_ms); }
 
   std::string GetSockAddr() const { return sock_raw_.GetSockAddr(); }
 
-  // Returns true is the message was queued, false if there was no space in the
-  // output buffer, in which case the client should retry or give up.
+  // Non-blocking. Returns true if the entire message was queued, false if the
+  // 8 MiB / 1024-message output queue is full (no bytes accepted in that case).
+  // Queued descriptors are duplicated; callers may close their originals.
+  // A pending queue has a 30-second default deadline, set by SetTxTimeout().
+  // false means the client should retry or give up.
   // If any other error happens the socket will be shutdown and
   // EventListener::OnDisconnect() will be called.
   // If the socket is not connected, Send() will just return false.
   // Does not append a null string terminator to msg in any case.
   bool Send(const void* msg, size_t len, const int* send_fds, size_t num_fds);
+
+  // Queue a regular file from offset zero; buffer at most one 64 KiB chunk.
+  // Duplicates fd; retains ordering with Send and observes the same deadline.
+  bool SendFile(int fd, size_t len);
 
   inline bool Send(const void* msg, size_t len, int send_fd = -1) {
     if (send_fd != -1) return Send(msg, len, &send_fd, 1);
@@ -323,6 +341,9 @@ class UnixSocket {
 
   void OnEvent();
   void NotifyConnectionState(bool success);
+  bool FlushPendingWrites();
+  void ArmWriteTimeout(bool was_empty);
+  bool UpdateWritableInterest();
 
   UnixSocketRaw sock_raw_;
   State state_ = State::kDisconnected;
@@ -330,6 +351,21 @@ class UnixSocket {
 
   EventListener* const event_listener_;
   TaskRunner* const task_runner_;
+  struct PendingWrite {
+    std::string data;
+    size_t offset = 0;
+    std::vector<ScopedFile> fds;
+    ScopedFile file;
+    size_t file_size = 0;
+  };
+  std::recursive_mutex send_mutex_;
+  std::deque<PendingWrite> pending_writes_;
+  size_t queued_bytes_ = 0;
+  bool writable_interest_ = false;
+  bool close_after_flush_ = false;
+  bool close_notify_ = false;
+  uint32_t tx_timeout_ms_ = 30000;
+  uint64_t write_generation_ = 0;
   WeakPtrFactory<UnixSocket> weak_ptr_factory_;
 };
 

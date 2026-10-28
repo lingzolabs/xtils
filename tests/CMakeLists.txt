@@ -47,6 +47,9 @@ add_xtils_test(test_http_client http_client_test.cc)
 set_tests_properties(test_http_client
     PROPERTIES RESOURCE_LOCK "network_port")
 add_xtils_test(test_net_include net_include_test.cc)
+if(TLS_BACKEND_LOWER STREQUAL "openssl")
+  add_xtils_test(test_tls_transport tls_transport_test.cc)
+endif()
 
 if(SCRIPTING_ENABLE)
   add_xtils_test(test_scripting scripting_test.cc)

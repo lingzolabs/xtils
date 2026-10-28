@@ -1,6 +1,8 @@
 #include "xtils/system/unix_socket.h"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -24,6 +26,139 @@ template <typename T>
 bool WaitFor(std::future<T>& f, int ms = 2000) {
   return f.wait_for(std::chrono::milliseconds(ms)) ==
          std::future_status::ready;
+}
+
+TEST_CASE(
+    "UnixSocket: backpressure does not block runner and queued close drains") {
+  auto [raw, peer] =
+      UnixSocketRaw::CreatePairPosix(SockFamily::kUnix, SockType::kStream);
+  int small = 4096;
+  setsockopt(raw.fd(), SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+  peer.SetRxTimeout(3000);
+  auto runner = ThreadTaskRunner::CreateAndStart("socket_backpressure");
+  UnixSocket::EventListener listener;
+  std::unique_ptr<UnixSocket> socket;
+  const std::string payload(1024 * 1024, 'q');
+  std::promise<bool> sent;
+  runner.PostTask([&] {
+    socket = UnixSocket::AdoptConnected(raw.ReleaseFd(), &listener, &runner,
+                                        SockFamily::kUnix, SockType::kStream);
+    bool accepted = socket->Send(payload.data(), payload.size());
+    socket->ShutdownAfterFlush(false);
+    sent.set_value(accepted);
+  });
+  auto sent_future = sent.get_future();
+  CHECK(WaitFor(sent_future, 500));
+  std::string received;
+  char buffer[16384];
+  while (received.size() < payload.size()) {
+    auto n = peer.Receive(buffer, sizeof(buffer));
+    if (n <= 0) break;
+    received.append(buffer, static_cast<size_t>(n));
+  }
+  CHECK(sent_future.get());
+  CHECK(received == payload);
+  std::promise<void> closed;
+  runner.PostTask([&] {
+    socket.reset();
+    closed.set_value();
+  });
+  closed.get_future().wait();
+}
+
+TEST_CASE("UnixSocket: queued descriptors survive caller close and send once") {
+  auto [raw, peer] =
+      UnixSocketRaw::CreatePairPosix(SockFamily::kUnix, SockType::kStream);
+  int small = 4096;
+  setsockopt(raw.fd(), SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+  peer.SetRxTimeout(3000);
+  auto runner = ThreadTaskRunner::CreateAndStart("socket_queued_fd");
+  UnixSocket::EventListener listener;
+  std::unique_ptr<UnixSocket> socket;
+  const std::string payload(256 * 1024, 'p');
+  std::promise<bool> sent;
+  runner.PostTask([&] {
+    socket = UnixSocket::AdoptConnected(raw.ReleaseFd(), &listener, &runner,
+                                        SockFamily::kUnix, SockType::kStream);
+    ScopedFile fd(open("/dev/null", O_RDONLY));
+    bool ok = socket->Send(payload.data(), payload.size());
+    ok = socket->Send("f", 1, fd.get()) && ok;
+    sent.set_value(ok);
+  });
+  auto ready = sent.get_future();
+  REQUIRE(WaitFor(ready));
+  CHECK(ready.get());
+  size_t received = 0;
+  int descriptors = 0;
+  while (received < payload.size() + 1) {
+    char buffer[16384];
+    ScopedFile fd;
+    auto n = peer.Receive(buffer, sizeof(buffer), &fd, 1);
+    if (n <= 0) break;
+    received += static_cast<size_t>(n);
+    if (fd) {
+      ++descriptors;
+      CHECK(fcntl(fd.get(), F_GETFD) >= 0);
+    }
+  }
+  CHECK(received == payload.size() + 1);
+  CHECK(descriptors == 1);
+  std::promise<void> closed;
+  runner.PostTask([&] {
+    socket.reset();
+    closed.set_value();
+  });
+  closed.get_future().wait();
+}
+
+TEST_CASE("UnixSocket: queued sends have bounded capacity and a deadline") {
+  auto [raw, peer] =
+      UnixSocketRaw::CreatePairPosix(SockFamily::kUnix, SockType::kStream);
+  int small = 4096;
+  setsockopt(raw.fd(), SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+  auto runner = ThreadTaskRunner::CreateAndStart("socket_send_timeout");
+  struct Listener : UnixSocket::EventListener {
+    void OnDisconnect(UnixSocket*) override { disconnected.set_value(); }
+    std::promise<void> disconnected;
+  } listener;
+  std::unique_ptr<UnixSocket> socket;
+  std::promise<bool> sent;
+  runner.PostTask([&] {
+    socket = UnixSocket::AdoptConnected(raw.ReleaseFd(), &listener, &runner,
+                                        SockFamily::kUnix, SockType::kStream);
+    socket->SetTxTimeout(20);
+    const std::string payload(1024 * 1024, 'x');
+    bool rejected = !socket->Send(payload.data(), 8 * 1024 * 1024 + 1);
+    sent.set_value(rejected && socket->Send(payload.data(), payload.size()));
+  });
+  auto ready = sent.get_future();
+  CHECK(WaitFor(ready));
+  CHECK(ready.get());
+  auto disconnected = listener.disconnected.get_future();
+  CHECK(WaitFor(disconnected));
+  std::promise<void> closed;
+  runner.PostTask([&] {
+    socket.reset();
+    closed.set_value();
+  });
+  closed.get_future().wait();
+}
+
+TEST_CASE("UnixSocket: zero-length datagrams are transmitted") {
+  auto [raw, peer] =
+      UnixSocketRaw::CreatePairPosix(SockFamily::kUnix, SockType::kDgram);
+  auto runner = ThreadTaskRunner::CreateAndStart("empty_datagram");
+  UnixSocket::EventListener listener;
+  std::promise<bool> sent;
+  runner.PostTask([&] {
+    auto socket =
+        UnixSocket::AdoptConnected(raw.ReleaseFd(), &listener, &runner,
+                                   SockFamily::kUnix, SockType::kDgram);
+    sent.set_value(socket->Send(nullptr, 0));
+  });
+  CHECK(sent.get_future().get());
+  pollfd ready{peer.fd(), POLLIN, 0};
+  CHECK(poll(&ready, 1, 500) == 1);
 }
 
 // --- GetSockFamily ---

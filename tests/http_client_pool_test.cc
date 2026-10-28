@@ -73,7 +73,11 @@ TEST_CASE("HttpClientPool: concurrent Send with size N") {
       HttpClient::Request req;
       req.url = HttpUrl("http://127.0.0.1:19201/echo");
       auto resp = pool.Send(req);
-      if (resp.status_code == 200) ok.fetch_add(1);
+      if (resp.status_code == 200) {
+        ok.fetch_add(1);
+      } else {
+        FAIL_CHECK("pool request failed: " << resp.status_message);
+      }
     });
   }
   for (auto& t : threads) t.join();

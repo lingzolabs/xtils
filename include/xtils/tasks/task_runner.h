@@ -71,6 +71,12 @@ class TaskRunner {
   virtual void AddFileDescriptorWatch(PlatformHandle,
                                       std::function<void()>) = 0;
 
+  // Enable POLLOUT in addition to readable/error events on an existing watch.
+  // Custom runners must override this to support non-blocking socket writes.
+  virtual bool SetFileDescriptorWatchWritable(PlatformHandle, bool enabled) {
+    return !enabled;
+  }
+
   virtual void RemoveFileDescriptorWatch(PlatformHandle) = 0;
 
   virtual bool RunsTasksOnCurrentThread() const = 0;

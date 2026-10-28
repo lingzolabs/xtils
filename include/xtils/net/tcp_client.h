@@ -67,6 +67,9 @@ class TcpClient : public UnixSocket::EventListener {
   // Get the underlying socket file descriptor
   SocketHandle GetSocketFd() const;
 
+  // TLS adapters use OnReadable() for both read and requested write readiness.
+  bool SetWritableInterest(bool enabled);
+
   // Set connection timeout in milliseconds
   void SetConnectTimeout(uint32_t timeout_ms);
 

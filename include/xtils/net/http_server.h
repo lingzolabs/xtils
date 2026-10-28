@@ -98,9 +98,9 @@ class HttpServerConnection {
     SendResponse(http_code, headers, content, true);
   }
 
-  // Stream a file to the client in chunks, avoiding loading the entire
-  // file into memory. Sends Content-Length from file size, then reads
-  // and sends in 64KB chunks. Returns false on file open error.
+  // Queue a regular file for non-blocking streaming without buffering it.
+  // Returns false if the response could not start (open/stat failure). Once
+  // headers are sent, transfer errors close the connection asynchronously.
   bool SendFileStreaming(const std::string& file_path, const char* http_code,
                          const HttpHeaders& headers = {});
 

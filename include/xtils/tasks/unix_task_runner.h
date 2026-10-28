@@ -83,6 +83,7 @@ class UnixTaskRunner : public TaskRunner {
                                               uint32_t delay_ms) override;
   bool CancelDelayedTask(DelayedTaskHandle handle) override;
   void AddFileDescriptorWatch(PlatformHandle, std::function<void()>) override;
+  bool SetFileDescriptorWatchWritable(PlatformHandle, bool enabled) override;
   void RemoveFileDescriptorWatch(PlatformHandle) override;
   bool RunsTasksOnCurrentThread() const override;
 
@@ -124,6 +125,7 @@ class UnixTaskRunner : public TaskRunner {
   struct WatchTask {
     std::function<void()> callback;
     size_t poll_fd_index;  // Index into |poll_fds_|.
+    bool writable = false;
   };
 
   std::map<PlatformHandle, WatchTask> watch_tasks_;

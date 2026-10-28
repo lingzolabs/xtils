@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -448,12 +449,51 @@ TEST_CASE("HTTP: middleware") {
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
 }
 
+TEST_CASE("HTTP: reject ambiguous request framing before dispatch") {
+  auto runner = ThreadTaskRunner::CreateAndStart("http_framing");
+  struct Handler : HttpRequestHandler {
+    void OnHttpRequest(const HttpServerRequest& req) override {
+      ++calls;
+      req.conn->SendResponse("200 OK", {}, "accepted");
+    }
+    std::atomic<int> calls{0};
+  } handler;
+  HttpServer server(&runner, &handler);
+  auto port = FindPort(19810);
+  REQUIRE(port != 0);
+  std::promise<bool> started;
+  runner.PostTask([&] { started.set_value(server.Start("127.0.0.1", port)); });
+  REQUIRE(started.get_future().get());
+  for (const std::string& headers :
+       {"Content-Length: 1\r\nContent-Length: 0\r\n",
+        "Transfer-Encoding: chunked\r\nContent-Length: 0\r\n",
+        "Transfer-Encoding: chunked\r\n", "Content-Length : 0\r\n",
+        "Content-Length: +0\r\n"}) {
+    INFO(headers);
+    auto response = DoHttpRequest(
+        runner, port,
+        "POST / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" +
+            headers + "\r\n");
+    CHECK(response.status_code == 400);
+  }
+  CHECK(handler.calls == 0);
+  std::promise<void> stopped;
+  runner.PostTask([&] {
+    server.Stop();
+    stopped.set_value();
+  });
+  stopped.get_future().wait();
+}
+
 TEST_CASE("HTTP: streaming file response") {
   auto tr = ThreadTaskRunner::CreateAndStart("http_file");
   uint16_t port = FindPort(19780);
   REQUIRE(port != 0);
 
-  // Create a temp file with known content (128KB to exceed chunk size).
+  size_t file_size = 128 * 1024;
+  SUBCASE("multiple chunks") {}
+  SUBCASE("larger than output queue") { file_size = 12 * 1024 * 1024; }
+  // Create a temp file with known content.
   std::string temp_path = "/tmp/xtils_http_test_stream.bin";
   struct TempFileGuard {
     std::string path;
@@ -463,9 +503,8 @@ TEST_CASE("HTTP: streaming file response") {
   {
     std::ofstream f(temp_path, std::ios::binary);
     REQUIRE(f.is_open());
-    // Write 128KB of repeating pattern.
     std::string pattern = "ABCDEFGHIJKLMNOP";  // 16 bytes
-    for (int i = 0; i < 8192; ++i) {
+    for (size_t i = 0; i < file_size / pattern.size(); ++i) {
       f.write(pattern.data(), pattern.size());
     }
   }
@@ -489,12 +528,14 @@ TEST_CASE("HTTP: streaming file response") {
                     5000);
 
   CHECK(resp.status_code == 200);
-  CHECK(resp.body.size() == 128 * 1024);
+  CHECK(resp.body.size() == file_size);
   // Verify content integrity - first and last 16 bytes.
   CHECK(resp.body.substr(0, 16) == "ABCDEFGHIJKLMNOP");
-  CHECK(resp.body.substr(128 * 1024 - 16, 16) == "ABCDEFGHIJKLMNOP");
+  if (resp.body.size() >= 16)
+    CHECK(resp.body.substr(resp.body.size() - 16) == "ABCDEFGHIJKLMNOP");
   // Check Content-Length header was correct.
-  CHECK(resp.raw.find("Content-Length: 131072") != std::string::npos);
+  CHECK(resp.raw.find("Content-Length: " + std::to_string(file_size)) !=
+        std::string::npos);
 
   tr.PostTask([&server]() { server.Stop(); });
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
