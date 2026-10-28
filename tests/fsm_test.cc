@@ -1,6 +1,7 @@
 #include "xtils/fsm/fsm.h"
 
 #include <atomic>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -383,6 +384,7 @@ TEST_CASE("FSM Concurrent Access") {
   SUBCASE("Concurrent ProcessEvent and IsInState") {
     std::atomic<bool> stop{false};
     std::atomic<int> query_count{0};
+    std::promise<void> reader_started;
 
     // Reader thread: continuously queries state
     std::thread reader([&]() {
@@ -390,10 +392,13 @@ TEST_CASE("FSM Concurrent Access") {
         fsm.IsInState("Idle");
         fsm.GetCurrentStateName();
         fsm.GetHistory();
-        query_count++;
+        if (query_count.fetch_add(1) == 0) reader_started.set_value();
       }
     });
 
+    // Do not allow a fast Release writer to finish before the reader is ever
+    // scheduled. Synchronize actual readiness instead of relying on timing.
+    reader_started.get_future().wait();
     // Writer thread: cycles through states
     for (int i = 0; i < 1000; ++i) {
       fsm.ProcessEvent(EVENT_A);  // Idle -> Running

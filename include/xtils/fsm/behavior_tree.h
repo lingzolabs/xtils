@@ -284,8 +284,8 @@ class Delay : public Decorator {
   static Ports getPorts() { return {InputPort<double>("delay_ms")}; }
 
  private:
-  int delay_ms_;
-  int start_time_;
+  double delay_ms_ = 0;
+  uint64_t start_time_ = 0;
 };
 
 class BtTree {
