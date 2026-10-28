@@ -1,6 +1,5 @@
-#include "xtils/net/transport/tls_transport.h"
-
 #include <openssl/pem.h>
+#include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
 #include <future>
@@ -9,6 +8,7 @@
 #include "net_test_server.h"
 #include "xtils/net/http_client.h"
 #include "xtils/net/http_common.h"
+#include "xtils/net/transport/tls_factory.h"
 #include "xtils/tasks/thread_task_runner.h"
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -18,8 +18,17 @@ using namespace xtils;
 using namespace std::chrono_literals;
 
 namespace {
+#ifdef USE_MBEDTLS
+using TestTransport = MbedTlsTransport;
+using TestContext = MbedTlsContext;
+#else
+using TestTransport = TlsTransport;
+using TestContext = OpenSslContext;
+#endif
+
 struct Certificate {
-  explicit Certificate(const char* dns = "localhost") {
+  explicit Certificate(const char* dns = "localhost",
+                       const char* subject_alt_name = nullptr) {
     EVP_PKEY_CTX* key_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
     EVP_PKEY_keygen_init(key_ctx);
     EVP_PKEY_CTX_set_rsa_keygen_bits(key_ctx, 2048);
@@ -36,17 +45,31 @@ struct Certificate {
                                reinterpret_cast<const unsigned char*>(dns), -1,
                                -1, 0);
     X509_set_issuer_name(cert, name);
-    std::string san = std::string("DNS:") + dns;
+    std::string san =
+        subject_alt_name ? subject_alt_name : std::string("DNS:") + dns;
     auto* ext =
         X509V3_EXT_conf_nid(nullptr, nullptr, NID_subject_alt_name, san.data());
     X509_add_ext(cert, ext, -1);
     X509_EXTENSION_free(ext);
+    ext = X509V3_EXT_conf_nid(nullptr, nullptr, NID_basic_constraints,
+                              const_cast<char*>("critical,CA:TRUE"));
+    X509_add_ext(cert, ext, -1);
+    X509_EXTENSION_free(ext);
     X509_sign(cert, key, EVP_sha256());
+    char path[] = "/tmp/xtils-tls-ca-XXXXXX";
+    int fd = mkstemp(path);
+    REQUIRE(fd >= 0);
+    ca_path = path;
+    FILE* file = fdopen(fd, "w");
+    REQUIRE(file);
+    REQUIRE(PEM_write_X509(file, cert) == 1);
+    REQUIRE(fclose(file) == 0);
     server_ctx = SSL_CTX_new(TLS_server_method());
     SSL_CTX_use_certificate(server_ctx, cert);
     SSL_CTX_use_PrivateKey(server_ctx, key);
   }
   ~Certificate() {
+    unlink(ca_path.c_str());
     SSL_CTX_free(server_ctx);
     X509_free(cert);
     EVP_PKEY_free(key);
@@ -54,6 +77,7 @@ struct Certificate {
   EVP_PKEY* key = nullptr;
   X509* cert = nullptr;
   SSL_CTX* server_ctx = nullptr;
+  std::string ca_path;
 };
 
 struct Listener : TransportEventListener {
@@ -71,6 +95,17 @@ struct Listener : TransportEventListener {
   std::promise<bool> result;
 };
 }  // namespace
+
+#ifdef USE_MBEDTLS
+TEST_CASE("mbedTLS: missing private key cleans up parsed certificates") {
+  Certificate cert;
+  auto config = TlsCertConfig::Insecure();
+  config.cert_file = cert.ca_path;
+  // A regular file cannot have a child path, so this cannot exist.
+  config.key_file = cert.ca_path + "/missing-key";
+  CHECK_FALSE(TestContext::Create(config));
+}
+#endif
 
 TEST_CASE("HTTPS: asynchronous timeout includes a silent TLS handshake") {
   std::promise<void> release;
@@ -134,11 +169,11 @@ TEST_CASE("TLS: silent peer does not block runner tasks") {
   });
   auto runner = ThreadTaskRunner::CreateAndStart("tls_stall_test");
   Listener listener;
-  TlsTransport transport(&runner, &listener);
+  TestTransport transport(&runner, &listener);
   runner.PostTask([&] {
     transport.Connect(
         HttpUrl("https://127.0.0.1:" + std::to_string(server.port)),
-        OpenSslContext::Create(TlsCertConfig::Insecure()));
+        TestContext::Create(TlsCertConfig::Insecure()));
   });
   accepted.get_future().wait();
   std::promise<void> marker;
@@ -155,31 +190,34 @@ TEST_CASE("TLS: silent peer does not block runner tasks") {
 
 TEST_CASE("TLS: Send preserves large payloads across partial writes") {
   Certificate cert;
-  const std::string payload(4 * 1024 * 1024, 'x');
+  std::string payload(4 * 1024 * 1024, '\0');
+  for (size_t i = 0; i < payload.size(); ++i)
+    payload[i] = static_cast<char>(i % 251);
   std::promise<void> send_returned;
   auto may_read = send_returned.get_future();
-  std::promise<size_t> received;
+  std::promise<std::string> received;
   NetTestServer server([&](int fd) {
     SSL* ssl = SSL_new(cert.server_ctx);
     SSL_set_fd(ssl, fd);
-    size_t total = 0;
+    std::string bytes;
     if (SSL_accept(ssl) == 1) {
       may_read.wait();
       char buf[16384];
-      while (total < payload.size()) {
+      while (bytes.size() < payload.size()) {
         int n = SSL_read(ssl, buf, sizeof(buf));
         if (n <= 0) break;
-        total += static_cast<size_t>(n);
+        bytes.append(buf, static_cast<size_t>(n));
       }
     }
-    received.set_value(total);
+    received.set_value(std::move(bytes));
     SSL_free(ssl);
   });
   struct Sender : Listener {
     void OnConnected(bool success) override {
       if (success) {
+        const std::string oversized(8 * 1024 * 1024 + 1, 'z');
         overflow_rejected =
-            !transport->Send(payload->data(), 8 * 1024 * 1024 + 1);
+            !transport->Send(oversized.data(), oversized.size());
         accepted = transport->Send(payload->data(), payload->size());
       }
       returned->set_value();
@@ -191,16 +229,18 @@ TEST_CASE("TLS: Send preserves large payloads across partial writes") {
     bool overflow_rejected = false;
   } listener;
   auto runner = ThreadTaskRunner::CreateAndStart("tls_send_test");
-  TlsTransport transport(&runner, &listener);
+  TestTransport transport(&runner, &listener);
   listener.transport = &transport;
   listener.payload = &payload;
   listener.returned = &send_returned;
   runner.PostTask([&] {
     transport.Connect(
         HttpUrl("https://127.0.0.1:" + std::to_string(server.port)),
-        OpenSslContext::Create(TlsCertConfig::Insecure()));
+        TestContext::Create(TlsCertConfig::Insecure()));
   });
-  CHECK(received.get_future().get() == payload.size());
+  auto bytes = received.get_future().get();
+  CHECK(bytes.size() == payload.size());
+  CHECK(bytes.compare(payload) == 0);
   std::promise<void> closed;
   runner.PostTask([&] {
     transport.Close();
@@ -214,22 +254,26 @@ TEST_CASE("TLS: Send preserves large payloads across partial writes") {
 TEST_CASE("TLS: trusted certificate must match DNS name or IP address") {
   std::string host = "localhost";
   const char* certificate_name = "localhost";
+  const char* subject_alt_name = nullptr;
   bool trusted = true;
   bool expected = false;
   SUBCASE("matching DNS name") {
     host = "localhost";
     expected = true;
   }
+  SUBCASE("matching IP subjectAltName") {
+    host = "127.0.0.1";
+    subject_alt_name = "IP:127.0.0.1";
+    expected = true;
+  }
   SUBCASE("IP absent from subjectAltName") { host = "127.0.0.1"; }
   SUBCASE("different DNS name") { certificate_name = "wrong.invalid"; }
   SUBCASE("untrusted certificate") { trusted = false; }
-  Certificate cert(certificate_name);
-  auto ctx = OpenSslContext::Create(TlsCertConfig::Default());
+  Certificate cert(certificate_name, subject_alt_name);
+  auto config = TlsCertConfig::Default();
+  if (trusted) config.ca_file = cert.ca_path;
+  auto ctx = TestContext::Create(config);
   REQUIRE(ctx);
-  if (trusted) {
-    REQUIRE(X509_STORE_add_cert(SSL_CTX_get_cert_store(ctx->ctx()),
-                                cert.cert) == 1);
-  }
   NetTestServer server([&](int fd) {
     SSL* ssl = SSL_new(cert.server_ctx);
     SSL_set_fd(ssl, fd);
@@ -238,7 +282,7 @@ TEST_CASE("TLS: trusted certificate must match DNS name or IP address") {
   });
   auto runner = ThreadTaskRunner::CreateAndStart("tls_test");
   Listener listener;
-  TlsTransport transport(&runner, &listener);
+  TestTransport transport(&runner, &listener);
   auto result = listener.result.get_future();
   runner.PostTask([&] {
     transport.Connect(

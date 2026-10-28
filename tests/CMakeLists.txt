@@ -47,8 +47,17 @@ add_xtils_test(test_http_client http_client_test.cc)
 set_tests_properties(test_http_client
     PROPERTIES RESOURCE_LOCK "network_port")
 add_xtils_test(test_net_include net_include_test.cc)
-if(TLS_BACKEND_LOWER STREQUAL "openssl")
+# The fixture server uses OpenSSL; the client uses the selected xtils backend.
+# Do not make OpenSSL a production dependency of an mbedTLS build.
+if(TLS_BACKEND_LOWER STREQUAL "mbedtls")
+  find_package(OpenSSL QUIET)
+endif()
+if(TARGET OpenSSL::SSL)
   add_xtils_test(test_tls_transport tls_transport_test.cc)
+  target_link_libraries(test_tls_transport PRIVATE OpenSSL::SSL)
+  set_tests_properties(test_tls_transport PROPERTIES TIMEOUT 30)
+else()
+  message(STATUS "TLS integration tests need OpenSSL for the fixture server")
 endif()
 
 if(SCRIPTING_ENABLE)

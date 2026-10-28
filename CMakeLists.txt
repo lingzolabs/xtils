@@ -21,7 +21,9 @@ endif()
 
 string(TOLOWER "${TLS_BACKEND}" TLS_BACKEND_LOWER)
 if(TLS_BACKEND_LOWER STREQUAL "mbedtls")
-  find_package(MbedTLS REQUIRED)
+  # This adapter uses the 3.x RNG/PK API, not the breaking 4.x PSA API.
+  # MbedTLS_DIR can select a separate 3.x installation on newer systems.
+  find_package(MbedTLS 3 REQUIRED)
 elseif(TLS_BACKEND_LOWER STREQUAL "openssl")
   find_package(OpenSSL REQUIRED)
 else()

@@ -160,7 +160,7 @@ The library exports `cxx_std_17` as a public compile feature — consumers autom
 The library requires exactly one TLS backend, selected via `TLS_BACKEND`:
 
 - **OpenSSL** (default, `TLS_BACKEND=openssl`): links `OpenSSL::SSL`
-- **mbedTLS** (`TLS_BACKEND=mbedtls`): links `MbedTLS::mbedtls`, `MbedTLS::mbedx509`, `MbedTLS::mbedcrypto`
+- **mbedTLS 3.x** (`TLS_BACKEND=mbedtls`, verified with 3.6.7): links `MbedTLS::mbedtls`, `MbedTLS::mbedx509`, `MbedTLS::mbedcrypto`. Use `MbedTLS_DIR` to select a separate 3.x installation when the system supplies 4.x; the 4.x PSA API is not supported by this adapter.
 
 Compile definition `USE_OPENSSL` or `USE_MBEDTLS` is propagated to consumers.
 

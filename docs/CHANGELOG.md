@@ -18,7 +18,13 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
   File responses queue owned descriptors and stream bounded chunks on writable
   events, including files larger than the output queue.
   Custom TaskRunner implementations used for networking must implement
-  `SetFileDescriptorWatchWritable`. TLS changes currently cover OpenSSL only.
+  `SetFileDescriptorWatchWritable`.
+- fix(mbedtls): keep handshakes non-blocking; retry partial writes via writable
+  watches instead of busy-waiting, with the same bounded queue as OpenSSL.
+  Free initialized certificate/key contexts on setup failures. Require the 3.x
+  CMake package and document explicit selection via `MbedTLS_DIR`.
+- test(tls): run the shared local handshake, timeout, DNS/IP identity, downgrade,
+  backpressure and byte-integrity tests against either client backend.
 - fix(http): reject duplicate Content-Length, unsupported Transfer-Encoding,
   invalid header names and non-decimal lengths before dispatching requests.
 - fix(http): initialize transports on the runner and include TLS handshakes in

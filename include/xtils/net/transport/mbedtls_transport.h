@@ -7,7 +7,9 @@
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
 
+#include <array>
 #include <atomic>
+#include <deque>
 #include <memory>
 
 #include "xtils/net/tcp_client.h"
@@ -37,8 +39,6 @@ class MbedTlsContext final : public TlsContext {
   mbedtls_pk_context client_key_;
   mbedtls_entropy_context entropy_;
   mbedtls_ctr_drbg_context ctr_drbg_;
-  bool has_ca_{false};
-  bool has_client_cert_{false};
 };
 
 class MbedTlsTransport final : public Transport,
@@ -49,6 +49,8 @@ class MbedTlsTransport final : public Transport,
   ~MbedTlsTransport() override;
 
   bool Connect(const HttpUrl& url, TlsContextPtr ctx) override;
+  // Non-blocking, bounded 8 MiB / 1024-record queue, like the OpenSSL backend.
+  // Methods and destruction must run on the supplied runner.
   bool Send(const void* data, size_t len) override;
   void Close() override;
 
@@ -62,6 +64,8 @@ class MbedTlsTransport final : public Transport,
 
   void ContinueHandshake();
   void DrainRead();
+  bool FlushWrites();
+  bool WaitForIO(int error);
   void Fail(const std::string& reason);
 
   static int MbedSend(void* ctx, const unsigned char* buf, size_t len);
@@ -79,6 +83,13 @@ class MbedTlsTransport final : public Transport,
   std::atomic<TLSState> state_;
 
   std::string host_;
+  std::deque<std::string> pending_writes_;
+  size_t write_offset_ = 0;
+  size_t queued_bytes_ = 0;
+  bool read_wants_write_ = false;
+  bool write_wants_write_ = false;
+  std::array<uint8_t, 16384> read_buffer_{};
+  WeakPtrFactory<MbedTlsTransport> weak_factory_{this};
 };
 
 }  // namespace xtils

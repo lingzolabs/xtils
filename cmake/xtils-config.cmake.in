@@ -6,7 +6,7 @@ set(XTILS_TLS_BACKEND "@TLS_BACKEND_LOWER@")
 if(XTILS_TLS_BACKEND STREQUAL "openssl")
     find_dependency(OpenSSL REQUIRED)
 elseif(XTILS_TLS_BACKEND STREQUAL "mbedtls")
-    find_dependency(MbedTLS REQUIRED)
+    find_dependency(MbedTLS 3 REQUIRED)
 endif()
 
 # Include the targets file

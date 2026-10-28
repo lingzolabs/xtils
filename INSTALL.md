@@ -41,6 +41,30 @@ cmake .. -DCMAKE_INSTALL_PREFIX=/path/to/your/install/dir
 make install
 ```
 
+### Selecting mbedTLS explicitly
+
+The adapter uses the **mbedTLS 3.x API** (verified with 3.6.7). System mbedTLS
+4.x is not interchangeable: its RNG/PK APIs and CMake targets have changed.
+Install a 3.x release into a separate prefix, then select its CMake package:
+
+```bash
+cmake -S . -B build-mbedtls \
+  -DTLS_BACKEND=mbedtls \
+  -DMbedTLS_DIR=/path/to/mbedtls-3.x/lib/cmake/MbedTLS \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DBUILD_TESTS=ON -DBUILD_EXAMPLES=ON -DBUILD_WITH_SANITIZERS=ON
+cmake --build build-mbedtls -j4
+ctest --test-dir build-mbedtls --timeout 40 --output-on-failure
+```
+
+`-DUSE_MBEDTLS=ON` remains a legacy alias. A separate build directory prevents
+mixing cached packages. Downstream `find_package(xtils)` consumers may also need
+the same `MbedTLS_DIR` or `CMAKE_PREFIX_PATH`.
+
+With OpenSSL development files installed, `test_tls_transport` uses an OpenSSL
+**fixture server** to test the selected client backend, including mbedTLS.
+OpenSSL is not linked into the mbedTLS production library by these tests.
+
 ## Using xtils in Your Project
 
 ### Method 1: Using find_package (Recommended)
