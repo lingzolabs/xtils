@@ -17,6 +17,31 @@ bool WaitFor(std::future<T>& f, int ms = 2000) {
   return f.wait_for(std::chrono::milliseconds(ms)) == std::future_status::ready;
 }
 
+TEST_CASE("SteadyTimer: cancellation during callback prevents rescheduling") {
+  TaskGroup group(1);
+  SteadyTimer timer(&group);
+  std::promise<void> entered;
+  std::promise<void> release;
+  auto released = release.get_future();
+  std::atomic<int> count{0};
+  auto id = timer.SetRepeatingTimer(1, [&] {
+    if (++count == 1) entered.set_value();
+    released.wait();
+  });
+  auto started = entered.get_future();
+  bool running = WaitFor(started);
+  CHECK(running);
+  CHECK(timer.CancelTimer(id));
+  CHECK(timer.GetActiveTimerCount() == 0);
+  release.set_value();
+  std::promise<void> drained;
+  group.PostAsyncTask([&] { drained.set_value(); }, 20);
+  auto done = drained.get_future();
+  CHECK(WaitFor(done));
+  group.Stop();
+  CHECK(count == 1);
+}
+
 // --- SteadyTimer ---
 
 TEST_CASE("SteadyTimer: SetRelativeTimer one-shot") {

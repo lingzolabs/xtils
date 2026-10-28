@@ -114,9 +114,13 @@ void BaseTimer<TimePoint, TimerInfoType>::ExecuteTimer(TimerId timer_id) {
     LogE("Timer callback unknown exception");
   }
 
-  // Handle repeating timers
-  if (timer_info->type == TimerType::kRepeating && !timer_info->cancelled) {
-    ScheduleRepeatingTimer(timer_info);
+  // Cancellation and the decision to reschedule share the same mutex. In
+  // particular, never read the non-atomic cancelled flag outside this lock.
+  {
+    std::lock_guard<std::mutex> lock(timers_mutex_);
+    if (timer_info->type == TimerType::kRepeating && !timer_info->cancelled) {
+      ScheduleRepeatingTimer(timer_info);
+    }
   }
 }
 

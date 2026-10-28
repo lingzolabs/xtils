@@ -70,6 +70,8 @@ class BaseTimer {
   explicit BaseTimer(TaskGroup* task_group)
       : task_group_(task_group), weak_factor_(this) {}
 
+  // Destruction must not race with API calls or executing callbacks. Stop/join
+  // the TaskGroup before destroying a timer that may still be executing.
   virtual ~BaseTimer() { CancelAllTimers(); }
 
   // Set a relative timer - execute after specified milliseconds from now
@@ -83,7 +85,8 @@ class BaseTimer {
   // Set a repeating timer - execute every interval_ms milliseconds
   TimerId SetRepeatingTimer(uint32_t interval_ms, TimerCallback callback);
 
-  // Cancel a timer
+  // Cancel a timer. Thread-safe; an already executing callback may finish.
+  // Cancellation does not wait for that callback, but prevents rescheduling.
   bool CancelTimer(TimerId timer_id);
 
   // Cancel all timers
