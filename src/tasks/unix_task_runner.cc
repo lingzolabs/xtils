@@ -35,7 +35,25 @@ UnixTaskRunner::UnixTaskRunner() {
   });
 }
 
-UnixTaskRunner::~UnixTaskRunner() = default;
+UnixTaskRunner::~UnixTaskRunner() {
+  // Pending closures can own sockets whose destructors remove watches or post
+  // further cleanup. Destroy them while all runner members are still alive,
+  // outside the lock and outside the containers being mutated by cleanup.
+  for (;;) {
+    decltype(immediate_tasks_) immediate;
+    decltype(delayed_tasks_) delayed;
+    decltype(watch_tasks_) watches;
+    {
+      std::lock_guard<std::mutex> lock(lock_);
+      if (immediate_tasks_.empty() && delayed_tasks_.empty() &&
+          watch_tasks_.empty())
+        break;
+      immediate.swap(immediate_tasks_);
+      delayed.swap(delayed_tasks_);
+      watches.swap(watch_tasks_);
+    }
+  }
+}
 
 void UnixTaskRunner::WakeUp() { event_.Notify(); }
 
@@ -94,7 +112,7 @@ void UnixTaskRunner::UpdateWatchTasksLocked() {
     PlatformHandle handle = it.first;
     WatchTask& watch_task = it.second;
     watch_task.poll_fd_index = poll_fds_.size();
-    short events = POLLIN;
+    short events = watch_task.readable ? POLLIN : 0;
     if (watch_task.writable) events |= POLLOUT;
     poll_fds_.push_back({handle, events, 0});
   }
@@ -261,6 +279,20 @@ bool UnixTaskRunner::SetFileDescriptorWatchWritable(PlatformHandle fd,
     if (it == watch_tasks_.end()) return false;
     if (it->second.writable == enabled) return true;
     it->second.writable = enabled;
+    watch_tasks_changed_ = true;
+  }
+  WakeUp();
+  return true;
+}
+
+bool UnixTaskRunner::SetFileDescriptorWatchReadable(PlatformHandle fd,
+                                                    bool enabled) {
+  {
+    std::lock_guard<std::mutex> lock(lock_);
+    auto it = watch_tasks_.find(fd);
+    if (it == watch_tasks_.end()) return false;
+    if (it->second.readable == enabled) return true;
+    it->second.readable = enabled;
     watch_tasks_changed_ = true;
   }
   WakeUp();

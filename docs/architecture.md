@@ -155,6 +155,32 @@ target_link_libraries(myapp xtils::xtils)
 
 The library exports `cxx_std_17` as a public compile feature — consumers automatically get C++17. The generated version-symbol archive (`xtils-autogen`) is exported as part of `xtils::xtils`, so C++-only downstream projects do not need to include xtils CMake helper scripts.
 
+## HTTP and transport execution
+
+HTTP request lifecycle uses `xtils::fsm::FSM`:
+`Idle → Connecting → Active → Finishing → Idle`. Failure, cancellation and
+timeout enter the same Finishing state. Network mutations stay on one runner;
+nested lifecycle events are queued, and cleanup/user callbacks run after the
+transport and parser stacks unwind. Sending is independent from parsing while
+Active, so an early rejection can stop an unfinished upload.
+
+`StreamWriter` owns ordered memory/file sources, retries unchanged chunks after
+backpressure, and yields after a 256 KiB production budget. Memory sources retain
+their caller-provided content; file sources buffer only a chunk. Socket/TLS
+queues remain capped at 8 MiB. `TrySend` accepts at most 16 KiB atomically and
+returns Accepted/WouldBlock/Closed/Error. Accepted means queued, not peer
+delivery. WouldBlock arms a deferred, one-shot capacity callback.
+
+HTTP servers pause readable interest until their response source is consumed,
+then resume buffered pipelined requests. Custom networking TaskRunners need both
+`SetFileDescriptorWatchReadable` and `SetFileDescriptorWatchWritable`.
+Runner teardown drops queued resource owners while watch containers are valid.
+
+The response parser, not disconnect alone, decides completion: fixed-length
+bodies require all bytes, chunked bodies require the terminal chunk and complete
+trailers, and only close-delimited bodies finish at clean EOF. HTTPS additionally
+requires a TLS close_notify for close-delimited completion.
+
 ## TLS Backend
 
 The library requires exactly one TLS backend, selected via `TLS_BACKEND`:

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "xtils/net/http_common.h"
+#include "xtils/net/stream_writer.h"
 #include "xtils/net/websocket_common.h"
 #include "xtils/system/paged_memory.h"
 #include "xtils/system/unix_socket.h"
@@ -129,6 +130,8 @@ class HttpServerConnection {
 
   // Works also for websockets.
   void SendResponseBody(const void* content, size_t content_length);
+  void ScheduleOutput();
+  void PumpOutput();
 
  private:
   friend class HttpServer;
@@ -152,6 +155,11 @@ class HttpServerConnection {
   // explicitly 'Connection: close'. This improves TraceProcessor's python API.
   // This is consistent with that nginx does.
   bool keepalive_ = true;
+  StreamWriter output_;
+  bool output_scheduled_ = false;
+  bool closing_ = false;
+  std::function<void()> output_ready_;
+  WeakPtrFactory<HttpServerConnection> weak_factory_{this};
 };
 
 class HttpServer : public UnixSocket::EventListener {
@@ -178,6 +186,7 @@ class HttpServer : public UnixSocket::EventListener {
   void OnConnect(UnixSocket* self, bool connected) override;
   void OnDisconnect(UnixSocket* self) override;
   void OnDataAvailable(UnixSocket* self) override;
+  void OnWriteCapacityAvailable(UnixSocket* self) override;
 
   TaskRunner* const task_runner_;
   HttpRequestHandler* req_handler_;

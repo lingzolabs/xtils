@@ -48,6 +48,7 @@ class ThreadTaskRunner : public TaskRunner {
   bool CancelDelayedTask(DelayedTaskHandle handle) override;
   void AddFileDescriptorWatch(PlatformHandle, std::function<void()>) override;
   bool SetFileDescriptorWatchWritable(PlatformHandle, bool enabled) override;
+  bool SetFileDescriptorWatchReadable(PlatformHandle, bool enabled) override;
   void RemoveFileDescriptorWatch(PlatformHandle) override;
   bool RunsTasksOnCurrentThread() const override;
 

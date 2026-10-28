@@ -1,3 +1,5 @@
+#include <unistd.h>
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -494,7 +496,11 @@ TEST_CASE("HTTP: streaming file response") {
   SUBCASE("multiple chunks") {}
   SUBCASE("larger than output queue") { file_size = 12 * 1024 * 1024; }
   // Create a temp file with known content.
-  std::string temp_path = "/tmp/xtils_http_test_stream.bin";
+  char path[] = "/tmp/xtils_http_test_stream-XXXXXX";
+  int fd = mkstemp(path);
+  REQUIRE(fd >= 0);
+  close(fd);
+  std::string temp_path = path;
   struct TempFileGuard {
     std::string path;
     ~TempFileGuard() { std::remove(path.c_str()); }

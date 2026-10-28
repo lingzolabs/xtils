@@ -24,6 +24,14 @@ bool PlainTcpTransport::Connect(const HttpUrl& url, TlsContextPtr ctx) {
   return tcp_->ConnectToHost(url.host, url.port);
 }
 
+SendStatus PlainTcpTransport::TrySend(const void* data, size_t len) {
+  return tcp_ ? tcp_->TrySend(data, len) : SendStatus::kClosed;
+}
+
+void PlainTcpTransport::OnWriteCapacityAvailable() {
+  if (listener_) listener_->OnWriteCapacityAvailable();
+}
+
 bool PlainTcpTransport::Send(const void* data, size_t len) {
   if (!tcp_ || !tcp_->IsConnected()) return false;
 

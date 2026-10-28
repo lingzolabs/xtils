@@ -41,17 +41,17 @@ class MbedTlsContext final : public TlsContext {
   mbedtls_ctr_drbg_context ctr_drbg_;
 };
 
-class MbedTlsTransport final : public Transport,
-                                public TcpClientEventListener {
+class MbedTlsTransport final : public Transport, public TcpClientEventListener {
  public:
   explicit MbedTlsTransport(TaskRunner* runner,
-                             TransportEventListener* listener);
+                            TransportEventListener* listener);
   ~MbedTlsTransport() override;
 
   bool Connect(const HttpUrl& url, TlsContextPtr ctx) override;
   // Non-blocking, bounded 8 MiB / 1024-record queue, like the OpenSSL backend.
   // Methods and destruction must run on the supplied runner.
   bool Send(const void* data, size_t len) override;
+  SendStatus TrySend(const void* data, size_t len) override;
   void Close() override;
 
  private:
@@ -65,6 +65,8 @@ class MbedTlsTransport final : public Transport,
   void ContinueHandshake();
   void DrainRead();
   bool FlushWrites();
+  void NotifyWriteCapacity();
+  void ScheduleRead();
   bool WaitForIO(int error);
   void Fail(const std::string& reason);
 
@@ -86,6 +88,9 @@ class MbedTlsTransport final : public Transport,
   std::deque<std::string> pending_writes_;
   size_t write_offset_ = 0;
   size_t queued_bytes_ = 0;
+  bool write_capacity_waiting_ = false;
+  bool read_scheduled_ = false;
+  uint64_t connection_generation_ = 0;
   bool read_wants_write_ = false;
   bool write_wants_write_ = false;
   std::array<uint8_t, 16384> read_buffer_{};

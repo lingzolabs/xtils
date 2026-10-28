@@ -7,6 +7,35 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
+- fix(net): distinguish accepted chunks, backpressure, closed transports and
+  errors with `TrySend`; deliver deferred capacity notifications on plain TCP,
+  OpenSSL and mbedTLS. Preserve the 8 MiB transport queue limit.
+- fix(http): resume memory, file and multipart producers in bounded turns;
+  calculate multipart Content-Length from actual segments, including empty
+  files. Pause server request reads while response sources are pending.
+- refactor(http): use the existing `fsm::FSM` for
+  Idle → Connecting → Active → Finishing → Idle. Serialize network state on
+  the owner runner, queue lifecycle events, and centralize terminal cleanup.
+  Sending and receiving can proceed simultaneously for early server responses.
+- fix(net): make cross-runner `TcpClient::Connect` command submission
+  nonblocking. A true return means accepted; OnConnected reports the outcome.
+  HTTP SendAsync/Cancel also post commands rather than waiting on another
+  runner. Sync HTTP calls on the owner runner now fail immediately.
+- fix(http): accepted requests produce one terminal result, including
+  cancellation; async invalid URLs are rejected without a callback. Ignore
+  stale timeouts/capacity events and permit reentrant completion callbacks.
+- fix(http): reject incomplete fixed-length/chunked responses at EOF; validate
+  chunk terminators, lengths and cumulative limits. Handle informational,
+  HEAD/204/304 and close-delimited responses correctly.
+- fix(tls): treat close_notify as EOF and yield bounded read work; do not accept
+  an unannounced mbedTLS EOF as successful close-delimited HTTP completion.
+- fix(tasks): release queued resource owners before runner watch containers are
+  destroyed, preventing a teardown UAF. Custom networking runners must implement
+  both readable and writable watch-interest changes.
+- test(net): add large request/response, multipart, capacity recovery, early
+  response, cancellation, reentrancy, EOF/framing and teardown regressions.
+  Isolate HTTP temporary files and IPC socket paths between test processes.
+
 - fix(http): return unfollowed redirects without recursion; strip explicit and
   default credentials across origins and reject HTTPS-to-HTTP redirects.
 - fix(tls): verify DNS/IP identities with OpenSSL, preserve partial writes, and

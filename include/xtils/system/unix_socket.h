@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "xtils/system/send_status.h"
 #include "xtils/tasks/task_runner.h"
 #include "xtils/utils/scoped.h"
 #include "xtils/utils/weak_ptr.h"
@@ -211,6 +212,7 @@ class UnixSocket {
     // watch events are possible, so it is possible that Receive() soon after
     // OnDataAvailable() returns 0 (just ignore those).
     virtual void OnDataAvailable(UnixSocket* self);
+    virtual void OnWriteCapacityAvailable(UnixSocket*) {}
   };
 
   enum class State {
@@ -269,6 +271,11 @@ class UnixSocket {
 
   // Request write readiness notifications through OnDataAvailable (TLS).
   bool SetWritableInterest(bool enabled);
+  bool SetReadInterest(bool enabled) {
+    return task_runner_->SetFileDescriptorWatchReadable(
+        sock_raw_.watch_handle(), enabled);
+  }
+  TaskRunner* GetTaskRunner() const { return task_runner_; }
 
   void SetTxTimeout(uint32_t timeout_ms) {
     tx_timeout_ms_ = timeout_ms;
@@ -287,6 +294,7 @@ class UnixSocket {
   // EventListener::OnDisconnect() will be called.
   // If the socket is not connected, Send() will just return false.
   // Does not append a null string terminator to msg in any case.
+  SendStatus TrySend(const void* data, size_t len);
   bool Send(const void* msg, size_t len, const int* send_fds, size_t num_fds);
 
   // Queue a regular file from offset zero; buffer at most one 64 KiB chunk.
@@ -344,6 +352,7 @@ class UnixSocket {
   bool FlushPendingWrites();
   void ArmWriteTimeout(bool was_empty);
   bool UpdateWritableInterest();
+  void NotifyWriteCapacity();
 
   UnixSocketRaw sock_raw_;
   State state_ = State::kDisconnected;
@@ -361,6 +370,7 @@ class UnixSocket {
   std::recursive_mutex send_mutex_;
   std::deque<PendingWrite> pending_writes_;
   size_t queued_bytes_ = 0;
+  bool write_capacity_waiting_ = false;
   bool writable_interest_ = false;
   bool close_after_flush_ = false;
   bool close_notify_ = false;

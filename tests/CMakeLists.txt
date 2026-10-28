@@ -43,6 +43,11 @@ set_tests_properties(test_unix_socket test_tcp test_udp test_http
 add_xtils_test(test_http_common http_common_test.cc)
 add_xtils_test(test_http_multipart http_multipart_test.cc)
 add_xtils_test(test_http_router http_router_test.cc)
+add_xtils_test(test_stream_writer stream_writer_test.cc)
+add_xtils_test(test_http_flow http_flow_test.cc)
+set_tests_properties(test_http_flow PROPERTIES TIMEOUT 40)
+add_xtils_test(test_network_flow network_flow_test.cc)
+set_tests_properties(test_network_flow PROPERTIES RESOURCE_LOCK "network_port" TIMEOUT 40)
 add_xtils_test(test_http_client http_client_test.cc)
 set_tests_properties(test_http_client
     PROPERTIES RESOURCE_LOCK "network_port")

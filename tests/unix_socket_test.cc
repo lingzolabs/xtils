@@ -24,8 +24,7 @@ using namespace xtils;
 
 template <typename T>
 bool WaitFor(std::future<T>& f, int ms = 2000) {
-  return f.wait_for(std::chrono::milliseconds(ms)) ==
-         std::future_status::ready;
+  return f.wait_for(std::chrono::milliseconds(ms)) == std::future_status::ready;
 }
 
 TEST_CASE(
@@ -64,6 +63,71 @@ TEST_CASE(
     closed.set_value();
   });
   closed.get_future().wait();
+}
+
+TEST_CASE(
+    "UnixSocket: TrySend resumes through deferred capacity notification") {
+  auto [raw, peer] =
+      UnixSocketRaw::CreatePairPosix(SockFamily::kUnix, SockType::kStream);
+  int small = 4096;
+  setsockopt(raw.fd(), SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+  peer.SetRxTimeout(3000);
+  auto runner = ThreadTaskRunner::CreateAndStart("socket_capacity");
+  const std::string payload(12 * 1024 * 1024, 'c');
+  struct Producer : UnixSocket::EventListener {
+    void OnWriteCapacityAvailable(UnixSocket* socket) override {
+      ++resumes;
+      Pump(socket);
+    }
+    void Pump(UnixSocket* socket) {
+      while (offset < payload->size()) {
+        size_t len = std::min(kMaxSendChunkSize, payload->size() - offset);
+        auto status = socket->TrySend(payload->data() + offset, len);
+        if (status == SendStatus::kWouldBlock) {
+          if (!reported) {
+            reported = true;
+            blocked.set_value();
+          }
+          return;
+        }
+        if (status != SendStatus::kAccepted) return;
+        offset += len;
+      }
+      socket->ShutdownAfterFlush(false);
+    }
+    const std::string* payload = nullptr;
+    size_t offset = 0;
+    int resumes = 0;
+    bool reported = false;
+    std::promise<void> blocked;
+  } producer;
+  producer.payload = &payload;
+  std::unique_ptr<UnixSocket> socket;
+  runner.PostTask([&] {
+    socket = UnixSocket::AdoptConnected(raw.ReleaseFd(), &producer, &runner,
+                                        SockFamily::kUnix, SockType::kStream);
+    producer.Pump(socket.get());
+  });
+  auto blocked = producer.blocked.get_future();
+  CHECK(WaitFor(blocked));
+  std::promise<void> marker;
+  runner.PostTask([&] { marker.set_value(); });
+  auto ready = marker.get_future();
+  CHECK(WaitFor(ready));
+  std::string received;
+  char buffer[65536];
+  while (received.size() < payload.size()) {
+    auto n = peer.Receive(buffer, sizeof(buffer));
+    if (n <= 0) break;
+    received.append(buffer, static_cast<size_t>(n));
+  }
+  CHECK(received == payload);
+  std::promise<int> closed;
+  runner.PostTask([&] {
+    socket.reset();
+    closed.set_value(producer.resumes);
+  });
+  CHECK(closed.get_future().get() > 0);
 }
 
 TEST_CASE("UnixSocket: queued descriptors survive caller close and send once") {
@@ -222,7 +286,8 @@ TEST_CASE("UnixSocketRaw: CreatePairPosix dgram") {
 
 TEST_CASE("UnixSocketRaw: IPv4 bind, listen, connect, send/receive") {
   // Create server socket
-  auto server = UnixSocketRaw::CreateMayFail(SockFamily::kInet, SockType::kStream);
+  auto server =
+      UnixSocketRaw::CreateMayFail(SockFamily::kInet, SockType::kStream);
   CHECK(static_cast<bool>(server));
 
   // Try binding on port 0 for ephemeral port
@@ -234,12 +299,13 @@ TEST_CASE("UnixSocketRaw: IPv4 bind, listen, connect, send/receive") {
   CHECK_FALSE(server_addr.empty());
 
   // Create client socket and connect
-  auto client = UnixSocketRaw::CreateMayFail(SockFamily::kInet, SockType::kStream);
+  auto client =
+      UnixSocketRaw::CreateMayFail(SockFamily::kInet, SockType::kStream);
   CHECK(static_cast<bool>(client));
   CHECK(client.Connect(server_addr));
 
   // Accept the connection on the server side
-  struct sockaddr_storage addr{};
+  struct sockaddr_storage addr {};
   socklen_t addr_len = sizeof(addr);
   int client_fd =
       accept(server.fd(), reinterpret_cast<struct sockaddr*>(&addr), &addr_len);
@@ -290,8 +356,8 @@ class TestListener : public UnixSocket::EventListener {
     }
   }
 
-  void OnNewIncomingConnection(
-      UnixSocket* self, std::unique_ptr<UnixSocket> new_conn) override {
+  void OnNewIncomingConnection(UnixSocket* self,
+                               std::unique_ptr<UnixSocket> new_conn) override {
     try {
       accept_promise.set_value(std::move(new_conn));
     } catch (...) {
@@ -340,9 +406,10 @@ TEST_CASE("UnixSocket: Listen + Connect + Data with ThreadTaskRunner") {
   // Client sends data, accepted socket should receive
   // We need a listener for the accepted connection
   TestListener accepted_listener;
-  // The accepted connection inherits the server_listener, so data arrives there.
-  // Actually, the accepted socket uses the server_listener's OnDataAvailable.
-  // Let's send from client and receive from the accepted socket directly.
+  // The accepted connection inherits the server_listener, so data arrives
+  // there. Actually, the accepted socket uses the server_listener's
+  // OnDataAvailable. Let's send from client and receive from the accepted
+  // socket directly.
   client->SendStr("hello from client");
 
   // Read from accepted socket - give it a moment
@@ -370,4 +437,3 @@ TEST_CASE("UnixSocket: Listen + Connect + Data with ThreadTaskRunner") {
   accepted->Shutdown(false);
   server->Shutdown(false);
 }
-

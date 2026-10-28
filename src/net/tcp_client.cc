@@ -1,6 +1,5 @@
 #include "xtils/net/tcp_client.h"
 
-#include <future>
 #include <sstream>
 
 namespace xtils {
@@ -10,23 +9,35 @@ TcpClient::TcpClient(TaskRunner* task_runner, TcpClientEventListener* listener)
       listener_(listener),
       state_(State::kDisconnected),
       server_port_(0),
-      connect_timeout_ms_(5000) {}
+      connect_timeout_ms_(5000) {
+  connect_lifetime_->owner = this;
+}
 
-TcpClient::~TcpClient() { Disconnect(); }
+TcpClient::~TcpClient() {
+  std::lock_guard<std::recursive_mutex> lock(connect_lifetime_->mutex);
+  connect_lifetime_->owner = nullptr;
+  Disconnect();
+}
 
 bool TcpClient::Connect(const std::string& address, uint16_t port) {
-  if (!task_runner_->RunsTasksOnCurrentThread()) {
-    // Install the socket before its connect callback can be dispatched.
-    auto connect = std::make_shared<std::packaged_task<bool()>>(
-        [this, address, port] { return Connect(address, port); });
-    auto result = connect->get_future();
-    task_runner_->PostTask([connect] { (*connect)(); });
-    return result.get();
-  }
-  if (state_ != State::kDisconnected) {
+  std::lock_guard<std::recursive_mutex> lock(connect_lifetime_->mutex);
+  State expected = State::kDisconnected;
+  if (!state_.compare_exchange_strong(expected, State::kConnecting))
     return false;
-  }
+  const auto generation = ++connect_generation_;
+  auto lifetime = connect_lifetime_;
+  task_runner_->PostTask([lifetime, address, port, generation] {
+    std::lock_guard<std::recursive_mutex> lock(lifetime->mutex);
+    if (lifetime->owner)
+      lifetime->owner->ConnectOnRunner(address, port, generation);
+  });
+  return true;
+}
 
+void TcpClient::ConnectOnRunner(const std::string& address, uint16_t port,
+                                uint64_t generation) {
+  if (generation != connect_generation_.load() || state_ != State::kConnecting)
+    return;
   server_address_ = address;
   server_port_ = port;
 
@@ -51,12 +62,9 @@ bool TcpClient::Connect(const std::string& address, uint16_t port) {
                                 SockType::kStream);
 
   if (!socket_) {
-    HandleError("Failed to create socket");
-    return false;
+    SetState(State::kError);
+    if (listener_) listener_->OnConnected(false);
   }
-
-  SetState(State::kConnecting);
-  return true;
 }
 
 bool TcpClient::ConnectToHost(const std::string& hostname, uint16_t port) {
@@ -65,11 +73,23 @@ bool TcpClient::ConnectToHost(const std::string& hostname, uint16_t port) {
 }
 
 void TcpClient::Disconnect() {
+  std::lock_guard<std::recursive_mutex> lock(connect_lifetime_->mutex);
+  ++connect_generation_;
   if (socket_) {
     socket_->Shutdown(false);
     socket_.reset();
   }
   SetState(State::kDisconnected);
+}
+
+SendStatus TcpClient::TrySend(const void* data, size_t len) {
+  if (state_ != State::kConnected || !socket_) return SendStatus::kClosed;
+  return socket_->TrySend(data, len);
+}
+
+void TcpClient::OnWriteCapacityAvailable(UnixSocket*) {
+  if (listener_ && state_ == State::kConnected)
+    listener_->OnWriteCapacityAvailable();
 }
 
 bool TcpClient::Send(const void* data, size_t len) {
@@ -143,7 +163,6 @@ void TcpClient::OnConnect(UnixSocket* self, bool connected) {
     SetState(State::kConnected);
   } else {
     SetState(State::kError);
-    HandleError("Connection failed");
   }
 
   if (listener_) {

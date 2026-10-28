@@ -185,6 +185,7 @@ bool TlsTransport::OnReadable() {
 }
 
 void TlsTransport::DrainSSLRead() {
+  size_t budget = 256 * 1024;
   while (state_ == TLSState::kConnected && ssl_) {
     int n = SSL_read(ssl_, read_buffer_.data(), read_buffer_.size());
     if (n > 0) {
@@ -193,6 +194,11 @@ void TlsTransport::DrainSSLRead() {
       if (listener_)
         listener_->OnDataReceived(read_buffer_.data(), static_cast<size_t>(n));
       if (!weak) return;
+      budget -= std::min(budget, static_cast<size_t>(n));
+      if (budget == 0) {
+        ScheduleRead();
+        return;
+      }
       continue;
     }
 
@@ -203,6 +209,10 @@ void TlsTransport::DrainSSLRead() {
       return;
     }
 
+    if (err == SSL_ERROR_ZERO_RETURN) {
+      OnDisconnected();
+      return;
+    }
     if (state_ == TLSState::kConnected) {
       char reason[256];
       ERR_error_string_n(err, reason, sizeof(reason));
@@ -210,6 +220,43 @@ void TlsTransport::DrainSSLRead() {
     }
     break;
   }
+}
+
+void TlsTransport::ScheduleRead() {
+  if (read_scheduled_ || state_ != TLSState::kConnected) return;
+  read_scheduled_ = true;
+  auto weak = weak_factory_.GetWeakPtr();
+  auto generation = connection_generation_;
+  runner_->PostTask([weak, generation] {
+    if (!weak || weak->connection_generation_ != generation) return;
+    weak->read_scheduled_ = false;
+    if (weak->state_ == TLSState::kConnected) weak->OnReadable();
+  });
+}
+
+SendStatus TlsTransport::TrySend(const void* data, size_t len) {
+  if (len > kMaxSendChunkSize || (len && !data)) return SendStatus::kError;
+  if (state_ != TLSState::kConnected) return SendStatus::kClosed;
+  if (len > 8 * 1024 * 1024 - queued_bytes_ ||
+      (len > 0 && pending_writes_.size() >= 1024)) {
+    write_capacity_waiting_ = true;
+    return SendStatus::kWouldBlock;
+  }
+  return Send(data, len) ? SendStatus::kAccepted : SendStatus::kError;
+}
+
+void TlsTransport::NotifyWriteCapacity() {
+  if (!write_capacity_waiting_ || queued_bytes_ > 4 * 1024 * 1024 ||
+      pending_writes_.size() >= 512)
+    return;
+  write_capacity_waiting_ = false;
+  auto weak = weak_factory_.GetWeakPtr();
+  auto generation = connection_generation_;
+  runner_->PostTask([weak, generation] {
+    if (weak && weak->state_ == TLSState::kConnected &&
+        weak->connection_generation_ == generation && weak->listener_)
+      weak->listener_->OnWriteCapacityAvailable();
+  });
 }
 
 bool TlsTransport::Send(const void* data, size_t len) {
@@ -233,6 +280,7 @@ bool TlsTransport::Send(const void* data, size_t len) {
 }
 
 bool TlsTransport::WaitForIO(int ssl_error) {
+  NotifyWriteCapacity();
   const bool writable = ssl_error == SSL_ERROR_WANT_WRITE ||
                         (!pending_writes_.empty() && write_wants_write_);
   if (!tcp_->SetWritableInterest(writable)) {
@@ -288,6 +336,9 @@ void TlsTransport::Fail(const std::string& reason) {
 }
 
 void TlsTransport::Close() {
+  read_scheduled_ = false;
+  ++connection_generation_;
+  write_capacity_waiting_ = false;
   if (tcp_) {
     tcp_->Disconnect();
   }

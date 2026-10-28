@@ -59,15 +59,13 @@ std::shared_ptr<MbedTlsContext> MbedTlsContext::Create(
   }
 
   // Set minimum TLS version to 1.2
-  mbedtls_ssl_conf_min_tls_version(&ctx->conf_,
-                                   MBEDTLS_SSL_VERSION_TLS1_2);
+  mbedtls_ssl_conf_min_tls_version(&ctx->conf_, MBEDTLS_SSL_VERSION_TLS1_2);
 
   mbedtls_ssl_conf_rng(&ctx->conf_, mbedtls_ctr_drbg_random, &ctx->ctr_drbg_);
 
   // Load CA certificates
   if (!cfg.ca_file.empty()) {
-    ret =
-        mbedtls_x509_crt_parse_file(&ctx->ca_cert_, cfg.ca_file.c_str());
+    ret = mbedtls_x509_crt_parse_file(&ctx->ca_cert_, cfg.ca_file.c_str());
     if (ret < 0) {
       LogW("mbedtls_x509_crt_parse_file CA failed: -0x%04x", -ret);
       // Non-fatal if verify_peer is false
@@ -85,16 +83,15 @@ std::shared_ptr<MbedTlsContext> MbedTlsContext::Create(
 
   // Load client certificate and key
   if (!cfg.cert_file.empty()) {
-    ret = mbedtls_x509_crt_parse_file(&ctx->client_cert_,
-                                      cfg.cert_file.c_str());
+    ret =
+        mbedtls_x509_crt_parse_file(&ctx->client_cert_, cfg.cert_file.c_str());
     if (ret != 0) {
       LogE("mbedtls_x509_crt_parse_file cert failed: -0x%04x", -ret);
       return nullptr;
     }
 
     ret = mbedtls_pk_parse_keyfile(&ctx->client_key_, cfg.key_file.c_str(),
-                                   nullptr,
-                                   mbedtls_ctr_drbg_random,
+                                   nullptr, mbedtls_ctr_drbg_random,
                                    &ctx->ctr_drbg_);
     if (ret != 0) {
       LogE("mbedtls_pk_parse_keyfile failed: -0x%04x", -ret);
@@ -111,7 +108,7 @@ std::shared_ptr<MbedTlsContext> MbedTlsContext::Create(
 // ---------- MbedTlsTransport ----------
 
 MbedTlsTransport::MbedTlsTransport(TaskRunner* runner,
-                                     TransportEventListener* listener)
+                                   TransportEventListener* listener)
     : Transport(listener),
       runner_(runner),
       ctx_(nullptr),
@@ -133,7 +130,7 @@ bool MbedTlsTransport::Connect(const HttpUrl& url, TlsContextPtr ctx) {
 }
 
 int MbedTlsTransport::MbedSend(void* ctx, const unsigned char* buf,
-                                size_t len) {
+                               size_t len) {
   auto* self = static_cast<MbedTlsTransport*>(ctx);
   int fd = self->tcp_->GetSocketFd();
   ssize_t ret = ::send(fd, buf, len, MSG_NOSIGNAL);
@@ -200,8 +197,7 @@ void MbedTlsTransport::ContinueHandshake() {
     return;
   }
 
-  if (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-      ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+  if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
     WaitForIO(ret);
     return;
   }
@@ -236,6 +232,7 @@ bool MbedTlsTransport::OnReadable() {
 }
 
 void MbedTlsTransport::DrainRead() {
+  size_t budget = 256 * 1024;
   while (state_ == TLSState::kConnected && ssl_inited_) {
     int n = mbedtls_ssl_read(&ssl_, read_buffer_.data(), read_buffer_.size());
     if (n > 0) {
@@ -244,6 +241,11 @@ void MbedTlsTransport::DrainRead() {
       if (listener_)
         listener_->OnDataReceived(read_buffer_.data(), static_cast<size_t>(n));
       if (!weak) return;
+      budget -= std::min(budget, static_cast<size_t>(n));
+      if (budget == 0) {
+        ScheduleRead();
+        return;
+      }
       continue;
     }
 
@@ -253,7 +255,11 @@ void MbedTlsTransport::DrainRead() {
       return;
     }
 
-    if (n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || n == 0) {
+    if (n == 0) {
+      Fail("Unexpected EOF without TLS close_notify");
+      return;
+    }
+    if (n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
       OnDisconnected();
       return;
     }
@@ -265,6 +271,43 @@ void MbedTlsTransport::DrainRead() {
     }
     break;
   }
+}
+
+void MbedTlsTransport::ScheduleRead() {
+  if (read_scheduled_ || state_ != TLSState::kConnected) return;
+  read_scheduled_ = true;
+  auto weak = weak_factory_.GetWeakPtr();
+  auto generation = connection_generation_;
+  runner_->PostTask([weak, generation] {
+    if (!weak || weak->connection_generation_ != generation) return;
+    weak->read_scheduled_ = false;
+    if (weak->state_ == TLSState::kConnected) weak->OnReadable();
+  });
+}
+
+SendStatus MbedTlsTransport::TrySend(const void* data, size_t len) {
+  if (len > kMaxSendChunkSize || (len && !data)) return SendStatus::kError;
+  if (state_ != TLSState::kConnected) return SendStatus::kClosed;
+  if (len > 8 * 1024 * 1024 - queued_bytes_ ||
+      (len > 0 && pending_writes_.size() >= 1024)) {
+    write_capacity_waiting_ = true;
+    return SendStatus::kWouldBlock;
+  }
+  return Send(data, len) ? SendStatus::kAccepted : SendStatus::kError;
+}
+
+void MbedTlsTransport::NotifyWriteCapacity() {
+  if (!write_capacity_waiting_ || queued_bytes_ > 4 * 1024 * 1024 ||
+      pending_writes_.size() >= 512)
+    return;
+  write_capacity_waiting_ = false;
+  auto weak = weak_factory_.GetWeakPtr();
+  auto generation = connection_generation_;
+  runner_->PostTask([weak, generation] {
+    if (weak && weak->state_ == TLSState::kConnected &&
+        weak->connection_generation_ == generation && weak->listener_)
+      weak->listener_->OnWriteCapacityAvailable();
+  });
 }
 
 bool MbedTlsTransport::Send(const void* data, size_t len) {
@@ -286,6 +329,7 @@ bool MbedTlsTransport::Send(const void* data, size_t len) {
 }
 
 bool MbedTlsTransport::WaitForIO(int error) {
+  NotifyWriteCapacity();
   const bool writable = error == MBEDTLS_ERR_SSL_WANT_WRITE ||
                         (!pending_writes_.empty() && write_wants_write_);
   if (!tcp_->SetWritableInterest(writable)) {
@@ -342,6 +386,9 @@ void MbedTlsTransport::Fail(const std::string& reason) {
 }
 
 void MbedTlsTransport::Close() {
+  read_scheduled_ = false;
+  ++connection_generation_;
+  write_capacity_waiting_ = false;
   if (ssl_inited_) {
     if (state_ == TLSState::kConnected) mbedtls_ssl_close_notify(&ssl_);
     mbedtls_ssl_free(&ssl_);

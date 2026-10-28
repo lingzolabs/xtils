@@ -481,15 +481,22 @@ class TcpClientEventListener {
 };
 
 TcpClient(TaskRunner*, TcpClientEventListener*);
-bool Connect(address, port);
+bool Connect(address, port);  // command accepted; OnConnected reports outcome
 bool ConnectToHost(hostname, port);  // DNS resolution
 void Disconnect();
-bool Send(const void* data, size_t len);
+bool Send(const void* data, size_t len);  // legacy all-or-none enqueue
+SendStatus TrySend(const void* data, size_t len);  // chunks <= 16 KiB
 bool SendString(const std::string& data);
 bool IsConnected() const;
 void SetKeepAlive(bool);
 void SetNoDelay(bool);
 ```
+
+`TrySend` returns `kAccepted`, `kWouldBlock`, `kClosed` or `kError`.
+Accepted means copied/queued, not delivered. After WouldBlock, retry from the
+deferred `OnWriteCapacityAvailable()` callback. Native transports and UnixSocket
+provide the same contract; UnixSocket's callback also receives the socket.
+`Connect` never waits for a different runner; other TCP I/O is owner-runner-only.
 
 ### TCP Server
 
@@ -559,7 +566,8 @@ HttpClient::Response PostJson(url, json);
 HttpClient::Response PostForm(url, map<string,string>);
 HttpClient::Response PostMultipart(url, fields, files);
 
-// Asynchronous (single-flight: returns false if this client is busy).
+// Asynchronous (false for busy/invalid URL; no callback on rejection).
+// Accepted requests have exactly one terminal result, including cancellation.
 // Keep listener alive until OnHttpResponse/OnHttpError is called; IsBusy()
 // tracks transport/request state and is not a listener-lifetime barrier.
 bool SendAsync(request, listener);
@@ -567,8 +575,9 @@ bool GetAsync(url, listener);
 bool PostAsync(url, body, content_type, listener);
 bool PostJsonAsync(url, json, listener);
 bool PostMultipartAsync(url, fields, files, listener);
+void Cancel();  // posts cancellation; terminal error is "Request cancelled"
 
-// Configuration
+// Configuration (change only while idle)
 void SetTimeout(uint32_t timeout_ms);
 void SetFollowRedirects(bool, max_redirects=5);
 void SetKeepAlive(bool);  // sends the header; no connection pool/reuse yet
@@ -576,6 +585,12 @@ void SetVerifySSL(bool);
 void SetSSLCertificate(cert_path);
 void SetCookie(name, value, domain="");
 ```
+
+Synchronous HTTP methods must not run on their owner runner. The runner must
+outlive the client; async listeners must survive until their terminal callback
+or client destruction. Cleanup precedes callbacks, allowing the callback to
+submit a new request or destroy the client. `GetLastResponse()` is not a
+cross-thread synchronization primitive.
 
 ### HTTP Server (low-level)
 
@@ -780,6 +795,8 @@ class TaskRunner {
   virtual void PostTask(std::function<void()>) = 0;
   virtual void PostDelayedTask(std::function<void()>, uint32_t delay_ms) = 0;
   virtual void AddFileDescriptorWatch(PlatformHandle, std::function<void()>) = 0;
+  virtual bool SetFileDescriptorWatchWritable(PlatformHandle, bool enabled);
+  virtual bool SetFileDescriptorWatchReadable(PlatformHandle, bool enabled);
   virtual void RemoveFileDescriptorWatch(PlatformHandle) = 0;
   virtual bool RunsTasksOnCurrentThread() const = 0;
 };

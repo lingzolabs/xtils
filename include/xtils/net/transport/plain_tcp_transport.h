@@ -18,6 +18,8 @@ class PlainTcpTransport final : public Transport,
   // Transport
   bool Connect(const HttpUrl& url, TlsContextPtr ptr = nullptr) override;
   bool Send(const void* data, size_t len) override;
+  SendStatus TrySend(const void* data, size_t len) override;
+  void OnWriteCapacityAvailable() override;
   void Close() override;
 
  private:

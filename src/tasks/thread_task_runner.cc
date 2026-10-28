@@ -94,6 +94,11 @@ bool ThreadTaskRunner::SetFileDescriptorWatchWritable(PlatformHandle handle,
   return task_runner_->SetFileDescriptorWatchWritable(handle, enabled);
 }
 
+bool ThreadTaskRunner::SetFileDescriptorWatchReadable(PlatformHandle handle,
+                                                      bool enabled) {
+  return task_runner_->SetFileDescriptorWatchReadable(handle, enabled);
+}
+
 void ThreadTaskRunner::RemoveFileDescriptorWatch(PlatformHandle handle) {
   task_runner_->RemoveFileDescriptorWatch(handle);
 }

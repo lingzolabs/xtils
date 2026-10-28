@@ -68,6 +68,7 @@ class TlsTransport final : public Transport, public TcpClientEventListener {
   // rejection; callers must retry later or close on false.
   // All transport methods and destruction must run on the supplied runner.
   bool Send(const void* data, size_t len) override;
+  SendStatus TrySend(const void* data, size_t len) override;
   void Close() override;
 
  private:
@@ -81,6 +82,8 @@ class TlsTransport final : public Transport, public TcpClientEventListener {
   void ContinueHandshake();
   void DrainSSLRead();
   bool FlushWrites();
+  void NotifyWriteCapacity();
+  void ScheduleRead();
   bool WaitForIO(int ssl_error);
   void Fail(const std::string& reason);
 
@@ -98,6 +101,9 @@ class TlsTransport final : public Transport, public TcpClientEventListener {
   std::deque<std::string> pending_writes_;
   size_t write_offset_ = 0;
   size_t queued_bytes_ = 0;
+  bool write_capacity_waiting_ = false;
+  bool read_scheduled_ = false;
+  uint64_t connection_generation_ = 0;
   bool read_wants_write_ = false;
   bool write_wants_write_ = false;
   std::array<uint8_t, 16384> read_buffer_{};

@@ -1,8 +1,10 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "xtils/system/unix_socket.h"
@@ -26,6 +28,7 @@ class TcpClientEventListener {
   virtual void OnDisconnected() = 0;
 
   virtual bool OnReadable() { return false; }
+  virtual void OnWriteCapacityAvailable() {}
 
   // Called when client encounters an error
   virtual void OnError(const std::string& error) {}
@@ -40,6 +43,8 @@ class TcpClient : public UnixSocket::EventListener {
 
   // Connect to server at the specified address and port
   // address can be IPv4 address like "192.168.1.1" or IPv6 like "::1"
+  // Returns whether the request was accepted, never waits for another runner.
+  // Completion is reported by OnConnected. Other I/O stays on the owner runner.
   bool Connect(const std::string& address, uint16_t port);
 
   // Connect using hostname resolution (supports both IPv4 and IPv6)
@@ -49,6 +54,7 @@ class TcpClient : public UnixSocket::EventListener {
   void Disconnect();
 
   // Send data to server
+  SendStatus TrySend(const void* data, size_t len);
   bool Send(const void* data, size_t len);
   bool SendString(const std::string& data);
 
@@ -88,16 +94,26 @@ class TcpClient : public UnixSocket::EventListener {
   void OnConnect(UnixSocket* self, bool connected) override;
   void OnDisconnect(UnixSocket* self) override;
   void OnDataAvailable(UnixSocket* self) override;
+  void OnWriteCapacityAvailable(UnixSocket*) override;
   void OnNewIncomingConnection(
       UnixSocket* self, std::unique_ptr<UnixSocket> new_connection) override {}
 
+  void ConnectOnRunner(const std::string& address, uint16_t port,
+                       uint64_t generation);
   void SetState(State new_state);
   void HandleError(const std::string& error);
 
   TaskRunner* task_runner_;
   TcpClientEventListener* listener_;
   std::unique_ptr<UnixSocket> socket_;
-  State state_;
+  std::atomic<State> state_;
+  std::atomic<uint64_t> connect_generation_{0};
+  struct ConnectLifetime {
+    std::recursive_mutex mutex;
+    TcpClient* owner = nullptr;
+  };
+  std::shared_ptr<ConnectLifetime> connect_lifetime_ =
+      std::make_shared<ConnectLifetime>();
   std::string server_address_;
   uint16_t server_port_;
   uint32_t connect_timeout_ms_;

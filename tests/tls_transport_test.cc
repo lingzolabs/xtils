@@ -107,6 +107,183 @@ TEST_CASE("mbedTLS: missing private key cleans up parsed certificates") {
 }
 #endif
 
+TEST_CASE("TLS: deferred capacity notification resumes an unchanged chunk") {
+  Certificate cert;
+  const std::string payload(24 * 1024 * 1024, 'w');
+  std::promise<void> release;
+  auto released = release.get_future();
+  std::promise<std::string> received;
+  NetTestServer server([&](int fd) {
+    SSL* ssl = SSL_new(cert.server_ctx);
+    SSL_set_fd(ssl, fd);
+    std::string bytes;
+    if (SSL_accept(ssl) == 1) {
+      released.wait();
+      char buffer[65536];
+      while (bytes.size() < payload.size()) {
+        int n = SSL_read(ssl, buffer, sizeof(buffer));
+        if (n <= 0) break;
+        bytes.append(buffer, n);
+      }
+    }
+    received.set_value(std::move(bytes));
+    SSL_free(ssl);
+  });
+  auto runner = ThreadTaskRunner::CreateAndStart("tls_capacity");
+  struct Producer : TransportEventListener {
+    void OnConnected(bool success) override {
+      if (success) Pump();
+    }
+    void OnDataReceived(const void*, size_t) override {}
+    void OnDisconnected() override {}
+    void OnError(const std::string&) override {}
+    void OnWriteCapacityAvailable() override {
+      ++resumes;
+      Pump();
+    }
+    void Pump() {
+      auto result = writer.Pump([&](const void* data, size_t len) {
+        return transport->TrySend(data, len);
+      });
+      if (result == StreamWriter::PumpResult::kWouldBlock && !reported) {
+        reported = true;
+        blocked.set_value();
+      } else if (result == StreamWriter::PumpResult::kYield) {
+        runner->PostTask([this] { Pump(); });
+      }
+    }
+    TaskRunner* runner = nullptr;
+    TestTransport* transport = nullptr;
+    StreamWriter writer;
+    bool reported = false;
+    int resumes = 0;
+    std::promise<void> blocked;
+  } producer;
+  TestTransport transport(&runner, &producer);
+  producer.runner = &runner;
+  producer.transport = &transport;
+  producer.writer.Append(payload);
+  runner.PostTask([&] {
+    transport.Connect(
+        HttpUrl("https://127.0.0.1:" + std::to_string(server.port)),
+        TestContext::Create(TlsCertConfig::Insecure()));
+  });
+  auto blocked = producer.blocked.get_future();
+  bool did_block = blocked.wait_for(2s) == std::future_status::ready;
+  CHECK(did_block);
+  std::promise<void> marker;
+  runner.PostTask([&] { marker.set_value(); });
+  CHECK(marker.get_future().wait_for(1s) == std::future_status::ready);
+  release.set_value();
+  auto bytes = received.get_future();
+  bool done = bytes.wait_for(5s) == std::future_status::ready;
+  CHECK(done);
+  if (done) CHECK(bytes.get() == payload);
+  std::promise<int> closed;
+  runner.PostTask([&] {
+    transport.Close();
+    closed.set_value(producer.resumes);
+  });
+  CHECK(closed.get_future().get() > 0);
+}
+
+TEST_CASE("HTTPS: large HTTP uploads resume under backpressure") {
+  Certificate cert;
+  std::string payload(12 * 1024 * 1024, 'h');
+  std::promise<std::string> received;
+  NetTestServer server([&](int fd) {
+    SSL* ssl = SSL_new(cert.server_ctx);
+    SSL_set_fd(ssl, fd);
+    std::string body;
+    if (SSL_accept(ssl) == 1) {
+      std::string headers;
+      char ch;
+      while (headers.find("\r\n\r\n") == std::string::npos &&
+             SSL_read(ssl, &ch, 1) == 1)
+        headers += ch;
+      char buffer[65536];
+      while (body.size() < payload.size()) {
+        int n = SSL_read(ssl, buffer, sizeof(buffer));
+        if (n <= 0) break;
+        body.append(buffer, n);
+      }
+      std::string response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+      SSL_write(ssl, response.data(), response.size());
+    }
+    received.set_value(std::move(body));
+    SSL_free(ssl);
+  });
+  auto runner = ThreadTaskRunner::CreateAndStart("https_large_upload");
+  HttpClient client(&runner);
+  client.SetVerifySSL(false);
+  auto response =
+      client.Post("https://127.0.0.1:" + std::to_string(server.port), payload);
+  CHECK(response.status_code == 200);
+  CHECK(response.body == "ok");
+  CHECK(received.get_future().get() == payload);
+}
+
+TEST_CASE("HTTPS: large responses continue after bounded read turns") {
+  Certificate cert;
+  const std::string payload(12 * 1024 * 1024, 'd');
+  NetTestServer server([&](int fd) {
+    SSL* ssl = SSL_new(cert.server_ctx);
+    SSL_set_fd(ssl, fd);
+    if (SSL_accept(ssl) == 1) {
+      char buffer[4096];
+      SSL_read(ssl, buffer, sizeof(buffer));
+      std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " +
+                             std::to_string(payload.size()) + "\r\n\r\n" +
+                             payload;
+      size_t sent = 0;
+      while (sent < response.size()) {
+        int n = SSL_write(ssl, response.data() + sent, response.size() - sent);
+        if (n <= 0) break;
+        sent += n;
+      }
+    }
+    SSL_free(ssl);
+  });
+  auto runner = ThreadTaskRunner::CreateAndStart("https_large_response");
+  HttpClient client(&runner);
+  client.SetVerifySSL(false);
+  auto response =
+      client.Get("https://127.0.0.1:" + std::to_string(server.port));
+  CHECK(response.status_code == 200);
+  CHECK(response.body == payload);
+}
+
+TEST_CASE("HTTPS: clean TLS EOF completes only close-delimited responses") {
+  bool truncated = false;
+  SUBCASE("close delimited") {}
+  SUBCASE("truncated Content-Length") { truncated = true; }
+  Certificate cert;
+  NetTestServer server([&](int fd) {
+    SSL* ssl = SSL_new(cert.server_ctx);
+    SSL_set_fd(ssl, fd);
+    if (SSL_accept(ssl) == 1) {
+      char buffer[4096];
+      SSL_read(ssl, buffer, sizeof(buffer));
+      std::string response = "HTTP/1.1 200 OK\r\n";
+      if (truncated) response += "Content-Length: 5\r\n";
+      response += "\r\nabc";
+      SSL_write(ssl, response.data(), response.size());
+      SSL_shutdown(ssl);  // Send close_notify; no need to wait for the peer.
+    }
+    SSL_free(ssl);
+  });
+  auto runner = ThreadTaskRunner::CreateAndStart("https_eof");
+  HttpClient client(&runner);
+  client.SetVerifySSL(false);
+  auto response =
+      client.Get("https://127.0.0.1:" + std::to_string(server.port));
+  CHECK(response.status_code == (truncated ? 0 : 200));
+  if (truncated)
+    CHECK(response.status_message.find("EOF") != std::string::npos);
+  else
+    CHECK(response.body == "abc");
+}
+
 TEST_CASE("HTTPS: asynchronous timeout includes a silent TLS handshake") {
   std::promise<void> release;
   auto released = release.get_future();

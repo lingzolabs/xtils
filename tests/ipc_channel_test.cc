@@ -1,5 +1,7 @@
 #include "xtils/net/ipc_channel.h"
 
+#include <unistd.h>
+
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -14,7 +16,8 @@
 
 using namespace xtils;
 
-static const std::string kTestSocket = "/tmp/xtils_ipc_test.sock";
+static const std::string kTestSocket =
+    "/tmp/xtils_ipc_test-" + std::to_string(getpid()) + ".sock";
 
 static uint16_t FindTcpPort(uint16_t base_port) {
   for (uint16_t port = base_port; port < base_port + 100; ++port) {

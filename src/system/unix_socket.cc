@@ -790,6 +790,31 @@ void UnixSocket::OnEvent() {
     }
   }
 }
+SendStatus UnixSocket::TrySend(const void* data, size_t len) {
+  std::lock_guard<std::recursive_mutex> lock(send_mutex_);
+  if (len > kMaxSendChunkSize || (len && !data)) return SendStatus::kError;
+  if (state_ != State::kConnected || close_after_flush_)
+    return SendStatus::kClosed;
+  if (Send(data, len)) return SendStatus::kAccepted;
+  if (IsAgain(errno) && state_ == State::kConnected) {
+    write_capacity_waiting_ = true;
+    return SendStatus::kWouldBlock;
+  }
+  return SendStatus::kError;
+}
+
+void UnixSocket::NotifyWriteCapacity() {
+  if (!write_capacity_waiting_ || queued_bytes_ > 4 * 1024 * 1024 ||
+      pending_writes_.size() >= 512)
+    return;
+  write_capacity_waiting_ = false;
+  auto weak = weak_ptr_factory_.GetWeakPtr();
+  task_runner_->PostTask([weak] {
+    if (weak && weak->is_connected())
+      weak->event_listener_->OnWriteCapacityAvailable(weak.get());
+  });
+}
+
 bool UnixSocket::Send(const void* msg, size_t len, const int* send_fds,
                       size_t num_fds) {
   std::lock_guard<std::recursive_mutex> lock(send_mutex_);
@@ -923,6 +948,7 @@ bool UnixSocket::FlushPendingWrites() {
       return true;
     }
   }
+  NotifyWriteCapacity();
   if (!UpdateWritableInterest() && !pending_writes_.empty()) {
     Shutdown(true);
     return false;
@@ -941,6 +967,7 @@ void UnixSocket::Shutdown(bool notify) {
   std::lock_guard<std::recursive_mutex> lock(send_mutex_);
   pending_writes_.clear();
   queued_bytes_ = 0;
+  write_capacity_waiting_ = false;
   ++write_generation_;
   writable_interest_ = false;
   close_after_flush_ = false;

@@ -2,6 +2,8 @@
 #include <memory>
 #include <string>
 
+#include "xtils/system/send_status.h"
+
 namespace xtils {
 
 class HttpUrl;
@@ -52,6 +54,8 @@ class TransportEventListener {
   virtual void OnDataReceived(const void* data, size_t len) = 0;
   virtual void OnDisconnected() = 0;
   virtual void OnError(const std::string& error) = 0;
+  // Deferred, one-shot notification after TrySend returned WouldBlock.
+  virtual void OnWriteCapacityAvailable() {}
 };
 
 class Transport {
@@ -61,6 +65,10 @@ class Transport {
 
   virtual bool Connect(const HttpUrl& url, TlsContextPtr ctx) = 0;
   virtual bool Send(const void* data, size_t len) = 0;
+  // Legacy implementations can keep Send; native backends report backpressure.
+  virtual SendStatus TrySend(const void* data, size_t len) {
+    return Send(data, len) ? SendStatus::kAccepted : SendStatus::kError;
+  }
   virtual void Close() = 0;
 
  protected:

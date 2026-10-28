@@ -25,7 +25,7 @@ class TaskRunner {
   // CancelDelayedTask(). Default implementation calls PostDelayedTask and
   // returns kInvalidDelayedTaskHandle, meaning cancellation is not supported.
   virtual DelayedTaskHandle PostDelayedTaskWithHandle(std::function<void()> t,
-                                                     uint32_t delay_ms) {
+                                                      uint32_t delay_ms) {
     PostDelayedTask(std::move(t), delay_ms);
     return kInvalidDelayedTaskHandle;
   }
@@ -34,9 +34,7 @@ class TaskRunner {
   // task was cancelled before it ran. Returns false if the task already ran,
   // already started running, or the handle is unknown / invalid. Default
   // implementation always returns false.
-  virtual bool CancelDelayedTask(DelayedTaskHandle /*handle*/) {
-    return false;
-  }
+  virtual bool CancelDelayedTask(DelayedTaskHandle /*handle*/) { return false; }
 
   // Steady-clock "now" for this runner. Default uses std::steady_clock so
   // tests can override with a fake. Callers wanting absolute scheduling
@@ -75,6 +73,10 @@ class TaskRunner {
   // Custom runners must override this to support non-blocking socket writes.
   virtual bool SetFileDescriptorWatchWritable(PlatformHandle, bool enabled) {
     return !enabled;
+  }
+
+  virtual bool SetFileDescriptorWatchReadable(PlatformHandle, bool enabled) {
+    return enabled;
   }
 
   virtual void RemoveFileDescriptorWatch(PlatformHandle) = 0;

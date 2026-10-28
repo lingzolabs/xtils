@@ -4,6 +4,8 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -11,7 +13,9 @@
 #include <thread>
 #include <vector>
 
+#include "xtils/fsm/fsm.h"
 #include "xtils/net/http_common.h"
+#include "xtils/net/stream_writer.h"
 #include "xtils/net/transport/transport.h"
 #include "xtils/tasks/task_runner.h"
 
@@ -106,10 +110,13 @@ class HttpClient : public TransportEventListener {
   ~HttpClient() override;
 
   // Synchronous HTTP request. A single HttpClient is single-flight: this
-  // returns an error response if another request is already in progress.
+  // returns an error response if busy or called on the owner runner.
   Response Send(const Request& request);
 
-  // Asynchronous HTTP request. Returns false if another request is in progress.
+  // Posts to the owner runner. False means invalid URL or busy (no callback).
+  // Accepted requests deliver exactly one terminal callback, including cancel.
+  // Keep the listener alive until that callback, or until this client is
+  // destroyed.
   bool SendAsync(const Request& request, Listener* listener);
 
   // Convenience methods for common HTTP operations.
@@ -138,7 +145,7 @@ class HttpClient : public TransportEventListener {
   // "Request cancelled".
   void Cancel();
 
-  // Configuration.
+  // Configuration: change only while idle.
   void SetDefaultHeaders(const HttpHeaders& headers);
   void AddDefaultHeader(const std::string& name, const std::string& value);
   void SetUserAgent(const std::string& user_agent);
@@ -166,23 +173,49 @@ class HttpClient : public TransportEventListener {
   const Response& GetLastResponse() const { return last_response_; }
 
  private:
+  struct LifetimeToken;
   void OnConnected(bool success) override;
   void OnDataReceived(const void* data, size_t len) override;
   void OnDisconnected() override;
   void OnError(const std::string& error) override;
+  void OnWriteCapacityAvailable() override;
 
   // HTTP protocol handling.
   std::string BuildHttpRequest(const Request& request);
-  bool SendHttpRequest(const Request& request);
-  bool SendMultipartBody(const Request& request);
+  bool PrepareOutput(const Request& request);
+  void PumpOutput();
+  void ScheduleOutput();
+  void PostOnRunner(std::function<void()> task);
   void ProcessReceivedData(const void* data, size_t len);
+  bool DeliverBody(size_t len);
+  static bool IsAlive(const std::shared_ptr<LifetimeToken>& lifetime);
   void ProcessChunkedBody();
   void ProcessFixedLengthBody();
   void HandleRedirect();
   void CompleteRequest();
   void HandleError(const std::string& error);
-  void CancelOnRunner();
-  bool FinishDeferredCancelOnRunner();
+  bool Submit(const Request&, Listener*,
+              std::shared_ptr<std::promise<Response>>);
+  void StartOnRunner(Request, Listener*,
+                     std::shared_ptr<std::promise<Response>>,
+                     uint64_t generation);
+  enum class Event {
+    kStart,
+    kConnected,
+    kRedirect,
+    kComplete,
+    kFail,
+    kCancel,
+    kTimeout,
+    kFinished
+  };
+  struct PendingEvent {
+    Event event;
+    std::string error;
+  };
+  void InitializeLifecycle();
+  void Dispatch(Event event, std::string error = {});
+  void FinishOnRunner();
 
   // URL parsing and connection.
   bool ConnectToHost(const HttpUrl& url);
@@ -190,17 +223,14 @@ class HttpClient : public TransportEventListener {
 
   // Header utilities.
   HttpHeaders MergeHeaders(const HttpHeaders& request_headers);
-  void ParseResponseHeaders(const std::string& header_text);
+  bool ParseResponseHeaders(const std::string& header_text);
 
   // Cookie utilities.
   void ProcessSetCookieHeader(const std::string& cookie_header,
                               const std::string& domain);
 
-  // Multipart utilities.
   std::string GenerateBoundary();
-  size_t CalculateMultipartSize(const std::vector<MultipartField>& fields,
-                                const std::vector<MultipartFile>& files,
-                                const std::string& boundary);
+  class TransportCallbacks;
 
   struct LifetimeToken {
     std::mutex mutex;
@@ -220,15 +250,15 @@ class HttpClient : public TransportEventListener {
     size_t bytes_received = 0;
     size_t body_bytes_received = 0;
     bool chunked_encoding = false;
-    int chunk_size = -1;
+    enum class ChunkPhase { kSize, kData, kTerminator, kTrailers };
+    ChunkPhase chunk_phase = ChunkPhase::kSize;
+    size_t chunk_remaining = 0;
+    size_t framing_bytes = 0;
     int redirect_count = 0;
     bool strip_sensitive_headers = false;
     uint32_t timeout_ms = 0;
     std::atomic<bool> timeout_scheduled{false};
     std::atomic<bool> completed{false};
-    bool in_user_callback = false;
-    bool cancel_requested = false;
-    bool deferred_cancel_scheduled = false;
 
     size_t bytes_sent = 0;
     size_t total_bytes = 0;
@@ -243,25 +273,37 @@ class HttpClient : public TransportEventListener {
       bytes_received = 0;
       body_bytes_received = 0;
       chunked_encoding = false;
-      chunk_size = -1;
+      chunk_phase = ChunkPhase::kSize;
+      chunk_remaining = 0;
+      framing_bytes = 0;
       redirect_count = 0;
       strip_sensitive_headers = false;
       timeout_ms = 0;
       timeout_scheduled.store(false);
       completed.store(false);
-      in_user_callback = false;
-      cancel_requested = false;
-      deferred_cancel_scheduled = false;
+
       bytes_sent = 0;
       total_bytes = 0;
     }
   };
+
+  fsm::FSM lifecycle_;
+  fsm::StateId idle_, connecting_, active_, finishing_;
+  std::deque<PendingEvent> events_;
+  bool dispatching_ = false;
+  std::string terminal_error_;
+  std::shared_ptr<std::promise<Response>> completion_;
+  std::atomic<uint64_t> cancelled_generation_{0};
+  TaskRunner::DelayedTaskHandle timeout_handle_ = 0;
 
   TaskRunner* task_runner_;
   Listener* listener_;
   std::unique_ptr<Transport> transport_;
   std::atomic<State> state_;
 
+  StreamWriter output_;
+  bool output_scheduled_ = false;
+  uint64_t output_generation_ = 0;
   RequestState current_;
   Response last_response_;
 
@@ -281,10 +323,9 @@ class HttpClient : public TransportEventListener {
   std::atomic<uint64_t> active_request_generation_{0};
 
   std::shared_ptr<LifetimeToken> lifetime_;
+  std::unique_ptr<TransportCallbacks> transport_callbacks_;
 
   std::mutex request_mutex_;
-  std::mutex sync_mutex_;
-  std::condition_variable sync_cv_;
 };
 
 }  // namespace xtils

@@ -96,6 +96,11 @@ void HttpServer::OnNewIncomingConnection(
   }
   LogD("[HTTP] New connection");
   clients_.emplace_back(std::move(sock), config_.max_payload_size + 4096);
+  auto* conn = &clients_.back();
+  conn->output_ready_ = [this, conn] {
+    if (conn->sock->is_connected() && !conn->closing_)
+      OnDataAvailable(conn->sock.get());
+  };
 }
 
 void HttpServer::OnConnect(UnixSocket*, bool) {}
@@ -118,6 +123,7 @@ void HttpServer::OnDataAvailable(UnixSocket* sock) {
   for (auto it = clients_.begin(); it != clients_.end() && !conn; ++it)
     conn = (it->sock.get() == sock) ? &*it : nullptr;
   XTILS_CHECK(conn);
+  if (!conn->output_.empty() || conn->closing_) return;
 
   char* rxbuf = reinterpret_cast<char*>(conn->rxbuf.Get());
   for (;;) {
@@ -146,6 +152,7 @@ void HttpServer::OnDataAvailable(UnixSocket* sock) {
     if (bytes_consumed == 0) break;
     memmove(rxbuf, &rxbuf[bytes_consumed], conn->rxbuf_used - bytes_consumed);
     conn->rxbuf_used -= bytes_consumed;
+    if (!conn->output_.empty() || conn->closing_) return;
   }
 }
 
@@ -523,7 +530,8 @@ void HttpServerConnection::SendResponseHeaders(const char* http_code,
     append("Vary: Origin\r\n");
   }
   append("\r\n");  // End-of-headers marker.
-  if (!sock->Send(resp_hdr.data(), resp_hdr.size())) sock->Shutdown(true);
+  output_.Prepend(std::string(resp_hdr.data(), resp_hdr.size()));
+  ScheduleOutput();
 }
 
 void HttpServerConnection::SendResponseBody(const void* data, size_t len) {
@@ -535,11 +543,57 @@ void HttpServerConnection::SendResponseBody(const void* data, size_t len) {
   content_len_actual_ += len;
   XTILS_CHECK(content_len_actual_ <= content_len_headers_ ||
               content_len_headers_ == kOmitContentLength);
-  if (!sock->Send(data, len)) sock->Shutdown(true);
+  output_.Append(std::string(static_cast<const char*>(data), len));
+  ScheduleOutput();
+}
+
+void HttpServer::OnWriteCapacityAvailable(UnixSocket* self) {
+  for (auto& conn : clients_) {
+    if (conn.sock.get() == self) {
+      conn.ScheduleOutput();
+      return;
+    }
+  }
 }
 
 void HttpServerConnection::Close() {
-  sock->ShutdownAfterFlush(/*notify=*/true);
+  closing_ = true;
+  ScheduleOutput();
+}
+
+void HttpServerConnection::ScheduleOutput() {
+  sock->SetReadInterest(false);
+  if (output_scheduled_ || !sock->is_connected()) return;
+  output_scheduled_ = true;
+  auto weak = weak_factory_.GetWeakPtr();
+  sock->GetTaskRunner()->PostTask([weak] {
+    if (!weak) return;
+    weak->output_scheduled_ = false;
+    weak->PumpOutput();
+  });
+}
+
+void HttpServerConnection::PumpOutput() {
+  if (!sock->is_connected()) return;
+  auto result = output_.Pump([this](const void* data, size_t len) {
+    return sock->TrySend(data, len);
+  });
+  if (result == StreamWriter::PumpResult::kError) {
+    sock->Shutdown(true);
+  } else if (result == StreamWriter::PumpResult::kYield) {
+    ScheduleOutput();
+  } else if (result == StreamWriter::PumpResult::kDone) {
+    output_.Reset();
+    if (closing_) {
+      sock->ShutdownAfterFlush(/*notify=*/true);
+    } else {
+      sock->SetReadInterest(true);
+      auto weak = weak_factory_.GetWeakPtr();
+      sock->GetTaskRunner()->PostTask([weak] {
+        if (weak && weak->output_ready_) weak->output_ready_();
+      });
+    }
+  }
 }
 
 void HttpServerConnection::SendResponse(const char* http_code,
@@ -555,25 +609,13 @@ void HttpServerConnection::SendResponse(const char* http_code,
 bool HttpServerConnection::SendFileStreaming(const std::string& file_path,
                                              const char* http_code,
                                              const HttpHeaders& headers) {
-  ScopedFile file(open(file_path.c_str(), O_RDONLY | O_CLOEXEC));
-  struct stat info {};
-  if (!file || fstat(file.get(), &info) != 0 || !S_ISREG(info.st_mode) ||
-      info.st_size < 0 || static_cast<uint64_t>(info.st_size) > SIZE_MAX) {
-    LogE("[HTTP] Failed to open file for streaming: %s", file_path.c_str());
-    return false;
-  }
-  const size_t file_size = static_cast<size_t>(info.st_size);
-  SendResponseHeaders(http_code, headers, file_size);
-  // Queue the descriptor, not the entire file. Writable events stream bounded
-  // chunks, so slow downloads never block the runner waiting for socket space.
-  if (!sock->SendFile(file.get(), file_size)) {
-    sock->Shutdown(true);
-  } else {
-    content_len_actual_ = file_size;
-    if (!keepalive_) Close();
-  }
-  // A response has started. Errors after this point close the connection;
-  // callers must not attempt to send a second set of response headers.
+  StreamWriter file;
+  if (!file.AppendFile(file_path)) return false;
+  size_t size = file.total_bytes();
+  output_ = std::move(file);
+  SendResponseHeaders(http_code, headers, size);
+  content_len_actual_ = size;
+  if (!keepalive_) Close();
   return true;
 }
 
@@ -592,7 +634,8 @@ void HttpServerConnection::SendWebsocketFrame(WebSocketOpcode opcode,
 
   auto frame_data = WebSocketUtils::BuildFrame(
       opcode, payload, payload_len, true /* fin */, false /* mask */);
-  if (!sock->Send(frame_data.data(), frame_data.size())) sock->Shutdown(true);
+  output_.Append(std::string(frame_data.begin(), frame_data.end()));
+  ScheduleOutput();
 }
 
 HttpServerConnection::HttpServerConnection(std::unique_ptr<UnixSocket> s,

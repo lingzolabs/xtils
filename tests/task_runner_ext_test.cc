@@ -1,14 +1,28 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "doctest/doctest.h"
-
 #include <atomic>
 #include <chrono>
 #include <thread>
 
+#include "doctest/doctest.h"
 #include "xtils/tasks/thread_task_runner.h"
 #include "xtils/tasks/unix_task_runner.h"
+#include "xtils/utils/scoped.h"
 
 using namespace xtils;
+
+TEST_CASE("TaskRunner: queued owners release watches before runner teardown") {
+  bool released = false;
+  {
+    UnixTaskRunner runner;
+    runner.AddFileDescriptorWatch(0, [] {});
+    auto owner = std::make_shared<Scoped>([&] {
+      runner.RemoveFileDescriptorWatch(0);
+      released = true;
+    });
+    runner.PostTask([owner] {});
+  }
+  CHECK(released);
+}
 
 TEST_CASE("TaskRunner: PostDelayedTaskWithHandle returns nonzero handle") {
   auto runner = ThreadTaskRunner::CreateAndStart("ext-test");

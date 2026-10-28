@@ -1,5 +1,7 @@
 #include "xtils/net/http_client.h"
 
+#include <algorithm>
+#include <charconv>
 #include <exception>
 #include <fstream>
 #include <sstream>
@@ -65,6 +67,51 @@ bool HttpClient::Response::HasHeader(const std::string& name) const {
   return HttpUtils::HasHeader(headers, name);
 }
 
+// Keeps transport callbacks safe while destruction hands the transport back to
+// its owner runner. No transport callback owns a raw, unguarded HttpClient.
+class HttpClient::TransportCallbacks final : public TransportEventListener {
+ public:
+  TransportCallbacks(HttpClient* owner, std::shared_ptr<LifetimeToken> lifetime)
+      : owner_(owner), lifetime_(std::move(lifetime)) {}
+  void OnConnected(bool ok) override {
+    Invoke([ok](HttpClient* c) { c->OnConnected(ok); });
+  }
+  void OnDataReceived(const void* data, size_t len) override {
+    Invoke([data, len](HttpClient* c) { c->OnDataReceived(data, len); });
+  }
+  void OnDisconnected() override {
+    Invoke([](HttpClient* c) { c->OnDisconnected(); });
+  }
+  void OnError(const std::string& error) override {
+    Invoke([&error](HttpClient* c) { c->OnError(error); });
+  }
+  void OnWriteCapacityAvailable() override {
+    Invoke([](HttpClient* c) { c->OnWriteCapacityAvailable(); });
+  }
+
+ private:
+  template <typename Callback>
+  void Invoke(Callback callback) {
+    auto lifetime = lifetime_;
+    {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (!lifetime->alive) return;
+      ++lifetime->active_callbacks;
+      lifetime->callback_thread = std::this_thread::get_id();
+    }
+    Scoped guard([lifetime] {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (--lifetime->active_callbacks == 0) {
+        lifetime->callback_thread = std::thread::id();
+        lifetime->cv.notify_all();
+      }
+    });
+    callback(owner_);
+  }
+  HttpClient* owner_;
+  std::shared_ptr<LifetimeToken> lifetime_;
+};
+
 // HttpClient implementation
 HttpClient::HttpClient(TaskRunner* task_runner)
     : task_runner_(task_runner),
@@ -79,110 +126,167 @@ HttpClient::HttpClient(TaskRunner* task_runner)
       ssl_cert_path_(),
       lifetime_(std::make_shared<LifetimeToken>()) {
   SetUserAgent("xtils/1.0");
+  InitializeLifecycle();
+  transport_callbacks_ = std::make_unique<TransportCallbacks>(this, lifetime_);
 }
 
 HttpClient::~HttpClient() {
   {
     std::unique_lock<std::mutex> lock(lifetime_->mutex);
     lifetime_->alive = false;
-    if (lifetime_->callback_thread != std::this_thread::get_id()) {
+    if (lifetime_->callback_thread != std::this_thread::get_id())
       lifetime_->cv.wait(lock,
-                         [this]() { return lifetime_->active_callbacks == 0; });
-    }
+                         [this] { return lifetime_->active_callbacks == 0; });
   }
-  Cancel();
+  // Never synchronously wait on a different runner for network cleanup.
+  struct Cleanup {
+    std::unique_ptr<TransportCallbacks> callbacks;
+    std::unique_ptr<Transport> transport;
+  };
+  auto cleanup = std::make_shared<Cleanup>();
+  cleanup->callbacks = std::move(transport_callbacks_);
+  cleanup->transport = std::move(transport_);
+  auto* runner = task_runner_;
+  auto timeout = timeout_handle_;
+  runner->PostTask([cleanup, runner, timeout] {
+    if (timeout) runner->CancelDelayedTask(timeout);
+    if (cleanup->transport) cleanup->transport->Close();
+  });
 }
 
-HttpClient::Response HttpClient::Send(const HttpClient::Request& request) {
-  if (!SendAsync(request, nullptr)) {
-    HttpClient::Response error_response;
-    error_response.status_code = 0;
-    error_response.status_message = current_.completed.load()
-                                        ? current_.response.status_message
-                                        : "Client is busy";
-    if (error_response.status_message.empty()) {
-      error_response.status_message = "Failed to start request";
-    }
-    return error_response;
+HttpClient::Response HttpClient::Send(const Request& request) {
+  Response error;
+  if (task_runner_->RunsTasksOnCurrentThread()) {
+    error.status_message = "Synchronous HTTP request on owner runner";
+    return error;
   }
-
-  std::unique_lock<std::mutex> lock(sync_mutex_);
-  auto timeout = std::chrono::milliseconds(
-      request.timeout_ms > 0 ? request.timeout_ms : default_timeout_ms_);
-  bool completed = sync_cv_.wait_for(
-      lock, timeout, [this]() { return current_.completed.load(); });
-  lock.unlock();
-  if (!completed) {
-    Cancel();
-    HttpClient::Response timeout_response;
-    timeout_response.status_code = 0;
-    timeout_response.status_message = "Request timeout";
-    return timeout_response;
+  if (!request.url.IsValid()) {
+    error.status_message = "Invalid URL";
+    return error;
   }
-
-  return current_.response;
+  auto completion = std::make_shared<std::promise<Response>>();
+  auto result = completion->get_future();
+  if (!Submit(request, nullptr, completion)) {
+    error.status_message = "Client is busy";
+    return error;
+  }
+  // The runner owns the deadline. A per-request promise cannot accidentally
+  // observe the result or completion flag of a later request.
+  return result.get();
 }
 
-bool HttpClient::SendAsync(const HttpClient::Request& request,
-                           HttpClient::Listener* listener) {
-  std::string start_error;
-  {
-    std::lock_guard<std::mutex> lock(request_mutex_);
-    State expected = State::kIdle;
-    if (!state_.compare_exchange_strong(expected, State::kConnecting)) {
-      return false;
-    }
+bool HttpClient::SendAsync(const Request& request, Listener* listener) {
+  return Submit(request, listener, nullptr);
+}
 
-    listener_ = listener;
-    current_.Reset();
-    active_request_generation_.store(request_generation_.fetch_add(1) + 1);
-    current_.request = request;
-    current_.timeout_ms =
-        request.timeout_ms > 0 ? request.timeout_ms : default_timeout_ms_;
-
-    if (!request.url.IsValid()) {
-      start_error = "Invalid URL";
-    } else if (request.is_multipart()) {
-      try {
-        std::string boundary =
-            request.boundary.empty() ? GenerateBoundary() : request.boundary;
-        current_.request.boundary = boundary;
-        current_.total_bytes = CalculateMultipartSize(
-            request.multipart_fields, request.multipart_files, boundary);
-      } catch (const std::exception& e) {
-        start_error = e.what();
-      }
-    }
-
-    if (start_error.empty() && !ConnectToHost(request.url)) {
-      start_error = "Failed to initiate connection";
-    }
-  }
-
-  if (!start_error.empty()) {
-    HttpClient::Listener* listener = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(request_mutex_);
-      if (!current_.completed.load()) {
-        state_.store(State::kError);
-        current_.response.status_code = 0;
-        current_.response.status_message = start_error;
-        last_response_ = current_.response;
-        listener = listener_;
-        current_.completed.store(true);
-        state_.store(State::kIdle);
-      }
-    }
-    {
-      std::lock_guard<std::mutex> lock(sync_mutex_);
-      sync_cv_.notify_all();
-    }
-    if (listener) {
-      listener->OnHttpError(this, start_error);
-    }
+bool HttpClient::Submit(const Request& request, Listener* listener,
+                        std::shared_ptr<std::promise<Response>> completion) {
+  if (!request.url.IsValid()) return false;
+  std::lock_guard<std::mutex> lock(request_mutex_);
+  State expected = State::kIdle;
+  if (!state_.compare_exchange_strong(expected, State::kConnecting))
     return false;
-  }
+  auto generation = request_generation_.fetch_add(1) + 1;
+  active_request_generation_.store(generation);
+  PostOnRunner([this, request, listener, completion, generation]() mutable {
+    StartOnRunner(std::move(request), listener, completion, generation);
+  });
   return true;
+}
+
+void HttpClient::StartOnRunner(
+    Request request, Listener* listener,
+    std::shared_ptr<std::promise<Response>> completion, uint64_t generation) {
+  if (generation != active_request_generation_.load()) return;
+  current_.Reset();
+  current_.request = std::move(request);
+  listener_ = listener;
+  completion_ = std::move(completion);
+  terminal_error_.clear();
+  current_.timeout_ms = current_.request.timeout_ms > 0
+                            ? current_.request.timeout_ms
+                            : default_timeout_ms_;
+  Dispatch(Event::kStart);
+  if (cancelled_generation_.load() == generation) {
+    Dispatch(Event::kCancel, "Request cancelled");
+    return;
+  }
+  if (current_.request.is_multipart() && current_.request.boundary.empty())
+    current_.request.boundary = GenerateBoundary();
+  ScheduleRequestTimeout();
+  ConnectToHost(current_.request.url);
+}
+
+void HttpClient::InitializeLifecycle() {
+  idle_ = lifecycle_.AddState("Idle");
+  connecting_ = lifecycle_.AddState("Connecting");
+  active_ = lifecycle_.AddState("Active");
+  finishing_ = lifecycle_.AddState("Finishing");
+  auto add = [this](fsm::StateId from, fsm::StateId to, Event event) {
+    lifecycle_.AddTransition(from, to, static_cast<fsm::EventType>(event));
+  };
+  add(idle_, connecting_, Event::kStart);
+  add(connecting_, active_, Event::kConnected);
+  add(active_, connecting_, Event::kRedirect);
+  add(active_, finishing_, Event::kComplete);
+  for (auto from : {connecting_, active_})
+    for (auto event : {Event::kFail, Event::kCancel, Event::kTimeout})
+      add(from, finishing_, event);
+  add(finishing_, idle_, Event::kFinished);
+  lifecycle_.Start(idle_);
+}
+
+void HttpClient::Dispatch(Event event, std::string error) {
+  events_.push_back({event, std::move(error)});
+  if (dispatching_) return;
+  dispatching_ = true;
+  Scoped guard([this] { dispatching_ = false; });
+  while (!events_.empty()) {
+    auto next = std::move(events_.front());
+    events_.pop_front();
+    bool was_finishing = lifecycle_.IsInState(finishing_);
+    lifecycle_.ProcessEvent(static_cast<fsm::EventType>(next.event));
+    if (!was_finishing && lifecycle_.IsInState(finishing_)) {
+      current_.completed.store(true);
+      terminal_error_ = std::move(next.error);
+      // Cleanup and user callbacks run only after parser/transport/FSM stacks
+      // unwind. Nested events are queued, never recursively ProcessEvent'ed.
+      PostOnRunner([this] { FinishOnRunner(); });
+    }
+  }
+}
+
+void HttpClient::FinishOnRunner() {
+  if (!lifecycle_.IsInState(finishing_)) return;
+  ++output_generation_;
+  output_scheduled_ = false;
+  output_.Reset();
+  if (timeout_handle_) task_runner_->CancelDelayedTask(timeout_handle_);
+  timeout_handle_ = 0;
+  if (transport_) transport_->Close();
+  if (!terminal_error_.empty()) {
+    current_.response.status_code = 0;
+    current_.response.status_message = terminal_error_;
+  }
+  last_response_ = current_.response;
+  auto response = std::move(current_.response);
+  current_.request = Request();
+  current_.receive_buffer.clear();
+  auto error = terminal_error_;
+  auto* listener = listener_;
+  auto completion = std::move(completion_);
+  listener_ = nullptr;
+  Dispatch(Event::kFinished);
+  state_.store(State::kIdle);
+  // Do not touch members after publishing: the callback/waiter may destroy us.
+  if (completion) {
+    completion->set_value(std::move(response));
+  } else if (listener) {
+    if (error.empty())
+      listener->OnHttpResponse(this, response);
+    else
+      listener->OnHttpError(this, error);
+  }
 }
 
 HttpClient::Response HttpClient::Get(const std::string& url) {
@@ -268,95 +372,16 @@ bool HttpClient::PostMultipartAsync(
 }
 
 void HttpClient::Cancel() {
-  if (task_runner_ && !task_runner_->RunsTasksOnCurrentThread()) {
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool done = false;
-    task_runner_->PostTask([this, &mutex, &cv, &done]() {
-      CancelOnRunner();
-      std::lock_guard<std::mutex> lock(mutex);
-      done = true;
-      cv.notify_one();
-    });
-    std::unique_lock<std::mutex> lock(mutex);
-    cv.wait(lock, [&done]() { return done; });
-    return;
-  }
-
-  CancelOnRunner();
-}
-
-void HttpClient::CancelOnRunner() {
-  {
-    std::lock_guard<std::mutex> lock(request_mutex_);
-    if (current_.completed.load() || state_.load() == State::kIdle) {
-      return;
-    }
-
-    active_request_generation_.fetch_add(1);
-    current_.response.status_code = 0;
-    current_.response.status_message = "Request cancelled";
-    last_response_ = current_.response;
-    current_.completed.store(true);
-    current_.cancel_requested = true;
-    listener_ = nullptr;
-
-    if (current_.in_user_callback) {
-      // Defer Close()/reset until the current transport callback has unwound.
-    } else {
-      state_.store(State::kIdle);
-      if (transport_) {
-        transport_->Close();
-        transport_.reset();
-      }
-    }
-  }
-
-  std::lock_guard<std::mutex> lock(sync_mutex_);
-  sync_cv_.notify_all();
-}
-
-bool HttpClient::FinishDeferredCancelOnRunner() {
-  if (!current_.cancel_requested) {
-    return false;
-  }
-  if (current_.deferred_cancel_scheduled) {
-    return true;
-  }
-
-  current_.deferred_cancel_scheduled = true;
-  auto lifetime = lifetime_;
-  const uint64_t generation = active_request_generation_.load();
-  task_runner_->PostTask([this, lifetime, generation]() {
-    {
-      std::lock_guard<std::mutex> lock(lifetime->mutex);
-      if (!lifetime->alive) return;
-      ++lifetime->active_callbacks;
-      lifetime->callback_thread = std::this_thread::get_id();
-    }
-    Scoped callback_guard([lifetime]() {
-      std::lock_guard<std::mutex> lock(lifetime->mutex);
-      if (lifetime->active_callbacks > 0) --lifetime->active_callbacks;
-      if (lifetime->active_callbacks == 0) {
-        lifetime->callback_thread = std::thread::id();
-        lifetime->cv.notify_all();
-      }
-    });
-
-    std::lock_guard<std::mutex> lock(request_mutex_);
-    if (active_request_generation_.load() != generation ||
-        !current_.cancel_requested) {
-      return;
-    }
-    if (transport_) {
-      transport_->Close();
-      transport_.reset();
-    }
-    current_.cancel_requested = false;
-    current_.deferred_cancel_scheduled = false;
-    state_.store(State::kIdle);
-  });
-  return true;
+  auto generation = active_request_generation_.load();
+  cancelled_generation_.store(generation);
+  auto cancel = [this, generation] {
+    if (generation == active_request_generation_.load() && IsBusy())
+      Dispatch(Event::kCancel, "Request cancelled");
+  };
+  if (task_runner_->RunsTasksOnCurrentThread())
+    cancel();
+  else
+    PostOnRunner(std::move(cancel));
 }
 
 void HttpClient::SetDefaultHeaders(const HttpHeaders& headers) {
@@ -426,12 +451,15 @@ void HttpClient::OnConnected(bool success) {
     return;
   }
 
+  Dispatch(Event::kConnected);
   state_.store(State::kSendingRequest);
 
   // Send the HTTP request
-  if (!SendHttpRequest(current_.request)) {
-    HandleError("Failed to send HTTP request");
+  if (!PrepareOutput(current_.request)) {
+    HandleError(output_.error());
+    return;
   }
+  ScheduleOutput();
 }
 
 void HttpClient::OnDataReceived(const void* data, size_t len) {
@@ -449,9 +477,9 @@ void HttpClient::OnDisconnected() {
   if (current_.headers_received && !current_.chunked_encoding &&
       !current_.has_content_length) {
     CompleteRequest();
-  } else if (state_ == State::kReceivingResponse) {
-    // Connection closed, complete the response if we have enough data
-    CompleteRequest();
+  } else {
+    // Fixed-length and chunked bodies complete in the parser, never on EOF.
+    HandleError("Unexpected EOF before the HTTP response was complete");
   }
 }
 
@@ -459,8 +487,13 @@ void HttpClient::OnError(const std::string& error) {
   if (current_.completed.load() || state_.load() == State::kIdle) {
     return;
   }
-  HandleError(error);
+  const auto generation = active_request_generation_.load();
+  PostOnRunner([this, generation, error] {
+    if (generation == active_request_generation_.load()) HandleError(error);
+  });
 }
+
+void HttpClient::OnWriteCapacityAvailable() { ScheduleOutput(); }
 
 // HTTP protocol handling
 std::string HttpClient::BuildHttpRequest(const HttpClient::Request& request) {
@@ -519,276 +552,281 @@ std::string HttpClient::BuildHttpRequest(const HttpClient::Request& request) {
   // End of headers
   oss << "\r\n";
 
-  // Add body for non-multipart requests
-  if (!request.is_multipart() && !request.body.empty()) {
-    oss << request.body;
-  }
-
   return oss.str();
 }
 
-bool HttpClient::SendHttpRequest(const HttpClient::Request& request) {
-  std::string request_text = BuildHttpRequest(request);
-
-  if (!transport_->Send(request_text.data(), request_text.size())) {
-    return false;
-  }
-
-  // For multipart, send the body separately
-  if (request.is_multipart()) {
-    return SendMultipartBody(request);
-  }
-
-  return true;
+void HttpClient::PostOnRunner(std::function<void()> task) {
+  auto lifetime = lifetime_;
+  task_runner_->PostTask([lifetime, task = std::move(task)] {
+    {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (!lifetime->alive) return;
+      ++lifetime->active_callbacks;
+      lifetime->callback_thread = std::this_thread::get_id();
+    }
+    Scoped guard([lifetime] {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (--lifetime->active_callbacks == 0) {
+        lifetime->callback_thread = std::thread::id();
+        lifetime->cv.notify_all();
+      }
+    });
+    task();
+  });
 }
 
-bool HttpClient::SendMultipartBody(const HttpClient::Request& request) {
-  const std::string& boundary = request.boundary;
-
-  // Send multipart fields
-  for (const auto& field : request.multipart_fields) {
-    std::ostringstream part;
-    part << "--" << boundary << "\r\n";
-    StackString<128> content_disposition(
-        R"(Content-Disposition: form-data; name="%s")", field.name.c_str());
-    part << content_disposition.c_str() << "\r\n\r\n";
-    part << field.value << "\r\n";
-
-    std::string part_str = part.str();
-    if (!transport_->Send(part_str.data(), part_str.size())) {
-      return false;
+bool HttpClient::PrepareOutput(const Request& request) {
+  ++output_generation_;
+  output_scheduled_ = false;
+  output_.Reset();
+  if (!request.is_multipart()) {
+    output_.Append(request.body);
+  } else {
+    for (const auto& field : request.multipart_fields) {
+      output_.Append("--" + request.boundary + "\r\n" +
+                     "Content-Disposition: form-data; name=\"" + field.name +
+                     "\"\r\n\r\n");
+      output_.Append(field.value);
+      output_.Append("\r\n");
     }
-    current_.bytes_sent += part_str.size();
+    for (const auto& file : request.multipart_files) {
+      output_.Append("--" + request.boundary + "\r\n" +
+                     "Content-Disposition: form-data; name=\"" +
+                     file.field_name + "\"; filename=\"" + file.filename +
+                     "\"\r\n" + "Content-Type: " + file.content_type +
+                     "\r\n\r\n");
+      if (!output_.AppendFile(file.file_path)) return false;
+      output_.Append("\r\n");
+    }
+    output_.Append("--" + request.boundary + "--\r\n");
   }
+  current_.total_bytes = output_.total_bytes();
+  output_.Prepend(BuildHttpRequest(request));
+  current_.total_bytes = output_.total_bytes();
+  current_.bytes_sent = 0;
+  return output_.error().empty();
+}
 
-  // Send multipart files
-  for (const auto& file : request.multipart_files) {
-    std::ostringstream part_header;
-    part_header << "--" << boundary << "\r\n";
-    StackString<256> content_disposition(
-        R"(Content-Disposition: form-data; name="%s"; filename="%s")",
-        file.field_name.c_str(), file.filename.c_str());
-    part_header << content_disposition.c_str() << "\r\n";
-    part_header << "Content-Type: " << file.content_type << "\r\n\r\n";
+void HttpClient::ScheduleOutput() {
+  if (output_scheduled_ || current_.completed.load() || output_.empty()) return;
+  output_scheduled_ = true;
+  const auto generation = output_generation_;
+  PostOnRunner([this, generation] {
+    if (generation != output_generation_) return;
+    output_scheduled_ = false;
+    PumpOutput();
+  });
+}
 
-    std::string header_str = part_header.str();
-    if (!transport_->Send(header_str.data(), header_str.size())) {
-      return false;
-    }
-    current_.bytes_sent += header_str.size();
-
-    // Read file content
-    std::ifstream file_stream(file.file_path, std::ios::binary);
-    if (!file_stream.is_open()) {
-      HandleError("Failed to open file: " + file.file_path);
-      return false;
-    }
-
-    char buffer[4096];
-    while (file_stream.read(buffer, sizeof(buffer)) ||
-           file_stream.gcount() > 0) {
-      if (!transport_->Send(buffer, file_stream.gcount())) {
-        return false;
-      }
-      current_.bytes_sent += file_stream.gcount();
-
-      // Report progress
-      if (listener_) {
-        current_.in_user_callback = true;
-        listener_->OnProgress(this, current_.bytes_sent, current_.total_bytes);
-        current_.in_user_callback = false;
-        if (FinishDeferredCancelOnRunner()) return false;
-      }
-    }
-
-    // Report progress
-    if (listener_) {
-      current_.in_user_callback = true;
-      listener_->OnProgress(this, current_.bytes_sent, current_.total_bytes);
-      current_.in_user_callback = false;
-      if (FinishDeferredCancelOnRunner()) return false;
-    }
-
-    // Send trailing CRLF
-    const char* crlf = "\r\n";
-    if (!transport_->Send(crlf, 2)) {
-      return false;
-    }
-    current_.bytes_sent += 2;
+void HttpClient::PumpOutput() {
+  if (current_.completed.load() || !transport_ || output_.empty()) return;
+  auto result = output_.Pump([this](const void* data, size_t len) {
+    return transport_->TrySend(data, len);
+  });
+  if (result == StreamWriter::PumpResult::kError) {
+    HandleError(output_.error());
+    return;
   }
-
-  // Send final boundary
-  std::string final_boundary = "--" + boundary + "--\r\n";
-  if (!transport_->Send(final_boundary.data(), final_boundary.size())) {
-    return false;
-  }
-  current_.bytes_sent += final_boundary.size();
-  // Report progress
+  current_.bytes_sent = output_.accepted_bytes();
+  if (result == StreamWriter::PumpResult::kYield) ScheduleOutput();
   if (listener_) {
-    current_.in_user_callback = true;
-    listener_->OnProgress(this, current_.bytes_sent, current_.total_bytes);
-    current_.in_user_callback = false;
-    if (FinishDeferredCancelOnRunner()) return false;
+    auto generation = active_request_generation_.load();
+    auto sent = current_.bytes_sent;
+    auto total = current_.total_bytes;
+    PostOnRunner([this, generation, sent, total] {
+      if (generation != active_request_generation_.load() ||
+          current_.completed.load() || !listener_)
+        return;
+      listener_->OnProgress(this, sent, total);
+    });
   }
+}
 
-  return true;
+bool HttpClient::IsAlive(const std::shared_ptr<LifetimeToken>& lifetime) {
+  std::lock_guard<std::mutex> lock(lifetime->mutex);
+  return lifetime->alive;
 }
 
 void HttpClient::ProcessReceivedData(const void* data, size_t len) {
   current_.receive_buffer.append(static_cast<const char*>(data), len);
   current_.bytes_received += len;
-
-  // If headers not yet received, try to parse them
-  if (!current_.headers_received) {
-    size_t header_end = current_.receive_buffer.find("\r\n\r\n");
-    if (header_end != std::string::npos) {
-      std::string header_text = current_.receive_buffer.substr(0, header_end);
-      ParseResponseHeaders(header_text);
-      current_.headers_received = true;
-
-      // Remove headers from buffer
-      current_.receive_buffer.erase(0, header_end + 4);
-
-      // Check for chunked encoding or content length
-      std::string transfer_encoding =
-          current_.response.GetHeader("Transfer-Encoding");
-      if (transfer_encoding.find("chunked") != std::string::npos) {
+  while (!current_.headers_received) {
+    auto end = current_.receive_buffer.find("\r\n\r\n");
+    if ((end == std::string::npos ? current_.receive_buffer.size() : end + 4) >
+        65536 - current_.framing_bytes) {
+      HandleError("HTTP response headers exceed limit");
+      return;
+    }
+    if (end == std::string::npos) return;
+    if (!ParseResponseHeaders(current_.receive_buffer.substr(0, end))) {
+      HandleError("Invalid HTTP response headers");
+      return;
+    }
+    current_.framing_bytes += end + 4;
+    current_.receive_buffer.erase(0, end + 4);
+    if (current_.response.status_code < 200) {
+      if (current_.response.status_code == 101) {
+        HandleError("Unexpected HTTP protocol upgrade");
+        return;
+      }
+      current_.response = Response();
+      continue;
+    }
+    current_.headers_received = true;
+    if (current_.request.method == HttpMethod::kHead ||
+        current_.response.status_code == 204 ||
+        current_.response.status_code == 304) {
+      CompleteRequest();
+      return;
+    }
+    bool has_transfer_encoding = false;
+    for (const auto& header : current_.response.headers) {
+      if (CaseInsensitiveEqual(header.name, "Transfer-Encoding")) {
+        if (has_transfer_encoding ||
+            !CaseInsensitiveEqual(header.value, "chunked")) {
+          HandleError("Unsupported Transfer-Encoding");
+          return;
+        }
+        has_transfer_encoding = true;
         current_.chunked_encoding = true;
         current_.response.chunked_encoding = true;
-      }
-
-      std::string content_length_str =
-          current_.response.GetHeader("Content-Length");
-      if (!content_length_str.empty()) {
-        auto content_length = StringToUInt64(content_length_str);
-        if (!content_length) {
+      } else if (CaseInsensitiveEqual(header.name, "Content-Length")) {
+        size_t length = 0;
+        const auto& value = header.value;
+        auto parsed =
+            std::from_chars(value.data(), value.data() + value.size(), length);
+        if (value.empty() || parsed.ec != std::errc() ||
+            parsed.ptr != value.data() + value.size() ||
+            (current_.has_content_length &&
+             current_.content_length != length)) {
           HandleError("Invalid Content-Length header");
           return;
         }
         current_.has_content_length = true;
-        current_.content_length = *content_length;
-        current_.response.content_length = current_.content_length;
-        if (current_.content_length > max_receive_buffer_size_) {
-          HandleError("Response content length exceeds maximum buffer size");
-          return;
-        }
+        current_.content_length = length;
+        current_.response.content_length = length;
       }
     }
-  }
-
-  // If headers received, process body
-  if (current_.headers_received) {
-    if (current_.chunked_encoding) {
-      ProcessChunkedBody();
-    } else {
-      ProcessFixedLengthBody();
+    if (current_.has_content_length && current_.chunked_encoding) {
+      HandleError("Ambiguous HTTP response framing");
+      return;
+    }
+    if (current_.content_length > max_receive_buffer_size_) {
+      HandleError("Response content length exceeds maximum buffer size");
+      return;
     }
   }
+  if (current_.chunked_encoding)
+    ProcessChunkedBody();
+  else
+    ProcessFixedLengthBody();
+}
+
+bool HttpClient::DeliverBody(size_t len) {
+  if (len > max_receive_buffer_size_ - current_.body_bytes_received) {
+    HandleError("Response body exceeds maximum buffer size");
+    return false;
+  }
+  auto lifetime = lifetime_;
+  bool append = true;
+  if (listener_) {
+    listener_->OnProgress(
+        this, current_.body_bytes_received + len,
+        current_.has_content_length ? current_.content_length : 0);
+    if (!IsAlive(lifetime) || current_.completed.load()) return false;
+    append = listener_->OnBodyData(this, current_.receive_buffer.data(), len);
+    if (!IsAlive(lifetime) || current_.completed.load()) return false;
+  }
+  if (append)
+    current_.response.body.append(current_.receive_buffer.data(), len);
+  current_.body_bytes_received += len;
+  current_.receive_buffer.erase(0, len);
+  return true;
 }
 
 void HttpClient::ProcessChunkedBody() {
-  while (true) {
-    // Ensure the buffer contains at least one complete line for the chunk size
-    size_t chunk_size_end = current_.receive_buffer.find("\r\n");
-    if (chunk_size_end == std::string::npos) {
-      return;  // Wait for more data
-    }
-    if (current_.chunk_size < 0) {  // don't parsed chunck_size
-      std::string chunk_size_str =
-          current_.receive_buffer.substr(0, chunk_size_end);
-      auto chunk_size = xtils::StringToUInt64(chunk_size_str, 16);
-      if (chunk_size) {
-        current_.chunk_size = *chunk_size;
-      } else {
-        HandleError("Invalid chunk size in chunked encoding");
-        return;
-      }
-      // Remove the chunk size line from the buffer
-      current_.receive_buffer.erase(0, chunk_size_end + 2);
-    }
-
-    // Handle the final chunk (chunk size 0). The remaining bytes are trailers,
-    // not response body. Wait until the trailer section terminates.
-    if (current_.chunk_size == 0) {
-      if (current_.receive_buffer.size() >= 2 &&
-          current_.receive_buffer.compare(0, 2, "\r\n") == 0) {
-        current_.receive_buffer.erase(0, 2);
-        CompleteRequest();
-      } else {
-        size_t trailer_end = current_.receive_buffer.find("\r\n\r\n");
-        if (trailer_end != std::string::npos) {
-          current_.receive_buffer.erase(0, trailer_end + 4);
-          CompleteRequest();
+  using Phase = RequestState::ChunkPhase;
+  for (;;) {
+    auto& buffer = current_.receive_buffer;
+    switch (current_.chunk_phase) {
+      case Phase::kSize: {
+        auto end = buffer.find("\r\n");
+        if ((end == std::string::npos ? buffer.size() : end) > 8192) {
+          HandleError("Chunk size line exceeds limit");
+          return;
         }
+        if (end == std::string::npos) return;
+        auto digits = std::min(end, buffer.find(';'));
+        size_t size = 0;
+        auto parsed =
+            std::from_chars(buffer.data(), buffer.data() + digits, size, 16);
+        if (digits == 0 || parsed.ec != std::errc() ||
+            parsed.ptr != buffer.data() + digits) {
+          HandleError("Invalid chunk size in chunked encoding");
+          return;
+        }
+        if (size > max_receive_buffer_size_ - current_.body_bytes_received) {
+          HandleError("Response body exceeds maximum buffer size");
+          return;
+        }
+        buffer.erase(0, end + 2);
+        current_.chunk_remaining = size;
+        current_.chunk_phase = size ? Phase::kData : Phase::kTrailers;
+        break;
       }
-      return;
+      case Phase::kData: {
+        auto count = std::min(current_.chunk_remaining, buffer.size());
+        if (count == 0) return;
+        if (!DeliverBody(count)) return;
+        current_.chunk_remaining -= count;
+        if (current_.chunk_remaining == 0)
+          current_.chunk_phase = Phase::kTerminator;
+        break;
+      }
+      case Phase::kTerminator:
+        if (buffer.size() < 2) return;
+        if (buffer.compare(0, 2, "\r\n") != 0) {
+          HandleError("Invalid chunk terminator");
+          return;
+        }
+        buffer.erase(0, 2);
+        current_.chunk_phase = Phase::kSize;
+        break;
+      case Phase::kTrailers: {
+        auto end = buffer.find("\r\n");
+        if ((end == std::string::npos ? buffer.size() : end + 2) >
+            65536 - current_.framing_bytes) {
+          HandleError("HTTP response trailers exceed limit");
+          return;
+        }
+        if (end == std::string::npos) return;
+        if (end == 0) {
+          buffer.erase(0, 2);
+          CompleteRequest();
+          return;
+        }
+        auto colon = buffer.find(':');
+        if (colon == 0 || colon >= end) {
+          HandleError("Invalid HTTP response trailer");
+          return;
+        }
+        current_.framing_bytes += end + 2;
+        buffer.erase(0, end + 2);
+        break;
+      }
     }
-
-    // Ensure the buffer contains the full chunk data and trailing \r\n
-    if (current_.receive_buffer.size() < current_.chunk_size + 2) {
-      return;  // Wait for more data
-    }
-    auto view = std::string_view(current_.receive_buffer);
-    current_.bytes_received += current_.chunk_size;
-    if (listener_) {
-      current_.in_user_callback = true;
-      listener_->OnProgress(this, current_.bytes_received, -1);
-      current_.in_user_callback = false;
-      if (FinishDeferredCancelOnRunner()) return;
-    }
-    bool append_body = true;
-    if (listener_) {
-      current_.in_user_callback = true;
-      append_body =
-          listener_->OnBodyData(this, view.data(), current_.chunk_size);
-      current_.in_user_callback = false;
-      if (FinishDeferredCancelOnRunner()) return;
-    }
-    if (append_body) {
-      current_.response.body.append(view.data(), current_.chunk_size);
-    }
-    // Remove the chunk data and trailing \r\n from the buffer
-    current_.receive_buffer.erase(0, current_.chunk_size + 2);
-    current_.chunk_size = -1;
   }
 }
 
-void HttpClient::ProcessFixedLengthBody() {  // Call body data callback if in
-                                             // streaming mode
-
-  if (listener_ && !current_.receive_buffer.empty()) {
-    current_.in_user_callback = true;
-    listener_->OnProgress(this, current_.bytes_received, current_.total_bytes);
-    current_.in_user_callback = false;
-    if (FinishDeferredCancelOnRunner()) return;
-  }
-
-  // For non-streaming mode, accumulate data
-  const size_t body_chunk_size = current_.receive_buffer.size();
-  if (!current_.receive_buffer.empty()) {
-    bool append_body = true;
-    if (listener_) {
-      current_.in_user_callback = true;
-      append_body = listener_->OnBodyData(this, current_.receive_buffer.data(),
-                                          current_.receive_buffer.size());
-      current_.in_user_callback = false;
-      if (FinishDeferredCancelOnRunner()) return;
-    }
-    if (append_body) {
-      current_.response.body.append(current_.receive_buffer);
-    }
-    current_.body_bytes_received += body_chunk_size;
-  }
-  current_.receive_buffer.clear();  // for next data
-
-  if (!current_.has_content_length) return;
-
-  // Check if response is complete. Use bytes consumed from the wire, not
-  // Response::body size, because streaming listeners may opt out of body
-  // accumulation by returning false from OnBodyData().
-  if (current_.body_bytes_received >= current_.content_length) {
+void HttpClient::ProcessFixedLengthBody() {
+  size_t count = current_.receive_buffer.size();
+  if (current_.has_content_length)
+    count =
+        std::min(count, current_.content_length - current_.body_bytes_received);
+  if (count && !DeliverBody(count)) return;
+  if (current_.has_content_length &&
+      current_.body_bytes_received == current_.content_length)
     CompleteRequest();
-  }
 }
 
 void HttpClient::HandleRedirect() {
@@ -804,10 +842,10 @@ void HttpClient::HandleRedirect() {
   }
 
   if (listener_) {
-    current_.in_user_callback = true;
+    auto lifetime = lifetime_;
     listener_->OnRedirect(this, location);
-    current_.in_user_callback = false;
-    if (FinishDeferredCancelOnRunner()) return;
+    if (!IsAlive(lifetime)) return;
+    if (current_.completed.load()) return;
   }
 
   current_.redirect_count++;
@@ -848,10 +886,16 @@ void HttpClient::HandleRedirect() {
   current_.bytes_received = 0;
   current_.body_bytes_received = 0;
   current_.chunked_encoding = false;
-  current_.chunk_size = -1;
+  current_.chunk_phase = RequestState::ChunkPhase::kSize;
+  current_.chunk_remaining = 0;
+  current_.framing_bytes = 0;
   current_.response = HttpClient::Response();
 
-  // Disconnect and reconnect
+  // Disconnect and reconnect; defer replacement until this callback unwinds.
+  ++output_generation_;
+  output_scheduled_ = false;
+  output_.Reset();
+  Dispatch(Event::kRedirect);
   if (transport_) transport_->Close();
 
   current_.request.url = new_url;
@@ -862,110 +906,23 @@ void HttpClient::HandleRedirect() {
 }
 
 void HttpClient::CompleteRequest() {
-  // Handle redirects
-  if (follow_redirects_ && current_.response.IsRedirect()) {
+  if (current_.completed.load()) return;
+  const int status = current_.response.status_code;
+  if (follow_redirects_ && (status == 301 || status == 302 || status == 303 ||
+                            status == 307 || status == 308)) {
     HandleRedirect();
     return;
   }
-
-  if (current_.completed.load()) {
-    return;
-  }
-
-  // Process Set-Cookie headers
   for (const auto& header : current_.response.headers) {
-    if (header.name == "Set-Cookie") {
+    if (CaseInsensitiveEqual(header.name, "Set-Cookie"))
       ProcessSetCookieHeader(header.value, current_.request.url.host);
-    }
   }
-
-  // Connections are recreated for each request. Stop old callbacks before
-  // publishing completion to a caller that can immediately reuse this client.
-  if (transport_) transport_->Close();
-  last_response_ = current_.response;
-  HttpClient::Response response = current_.response;
-  HttpClient::Listener* listener = listener_;
-  current_.completed.store(true);
-
-  // Reset state before waking sync waiters; Send() callers may destroy this
-  // object immediately after the notification.
-  state_.store(State::kIdle);
-
-  // Notify listener on the next runner turn so transport callbacks fully unwind
-  // before user code can start another request or destroy this client.
-  if (listener) {
-    auto lifetime = lifetime_;
-    task_runner_->PostTask([this, lifetime, listener, response]() {
-      {
-        std::lock_guard<std::mutex> lock(lifetime->mutex);
-        if (!lifetime->alive) return;
-        ++lifetime->active_callbacks;
-        lifetime->callback_thread = std::this_thread::get_id();
-      }
-      Scoped callback_guard([lifetime]() {
-        std::lock_guard<std::mutex> lock(lifetime->mutex);
-        if (lifetime->active_callbacks > 0) --lifetime->active_callbacks;
-        if (lifetime->active_callbacks == 0) {
-          lifetime->callback_thread = std::thread::id();
-          lifetime->cv.notify_all();
-        }
-      });
-      listener->OnHttpResponse(this, response);
-    });
-  }
-
-  // Notify sync waiters last; do not touch members after this point.
-  {
-    std::lock_guard<std::mutex> lock(sync_mutex_);
-    sync_cv_.notify_all();
-  }
+  Dispatch(Event::kComplete);
 }
 
 void HttpClient::HandleError(const std::string& error) {
-  if (current_.completed.load()) {
-    return;
-  }
-
-  state_.store(State::kError);
-  if (transport_) transport_->Close();
-  current_.response.status_code = 0;
-  current_.response.status_message = error;
-
-  last_response_ = current_.response;
-  HttpClient::Listener* listener = listener_;
-  std::string error_copy = error;
-  current_.completed.store(true);
-
-  state_.store(State::kIdle);
-
-  // Notify listener on the next runner turn so transport callbacks fully unwind
-  // before user code can start another request or destroy this client.
-  if (listener) {
-    auto lifetime = lifetime_;
-    task_runner_->PostTask([this, lifetime, listener, error_copy]() {
-      {
-        std::lock_guard<std::mutex> lock(lifetime->mutex);
-        if (!lifetime->alive) return;
-        ++lifetime->active_callbacks;
-        lifetime->callback_thread = std::this_thread::get_id();
-      }
-      Scoped callback_guard([lifetime]() {
-        std::lock_guard<std::mutex> lock(lifetime->mutex);
-        if (lifetime->active_callbacks > 0) --lifetime->active_callbacks;
-        if (lifetime->active_callbacks == 0) {
-          lifetime->callback_thread = std::thread::id();
-          lifetime->cv.notify_all();
-        }
-      });
-      listener->OnHttpError(this, error_copy);
-    });
-  }
-
-  // Notify sync waiters last; do not touch members after this point.
-  {
-    std::lock_guard<std::mutex> lock(sync_mutex_);
-    sync_cv_.notify_all();
-  }
+  if (!current_.completed.load())
+    Dispatch(Event::kFail, error.empty() ? "HTTP request failed" : error);
 }
 
 void HttpClient::ScheduleRequestTimeout() {
@@ -973,7 +930,7 @@ void HttpClient::ScheduleRequestTimeout() {
   if (current_.timeout_ms > 0 && !current_.timeout_scheduled.exchange(true)) {
     auto lifetime = lifetime_;
     const uint64_t generation = active_request_generation_.load();
-    task_runner_->PostDelayedTask(
+    timeout_handle_ = task_runner_->PostDelayedTaskWithHandle(
         [this, lifetime, generation]() {
           {
             std::lock_guard<std::mutex> lock(lifetime->mutex);
@@ -992,7 +949,7 @@ void HttpClient::ScheduleRequestTimeout() {
 
           if (active_request_generation_.load() == generation && IsBusy() &&
               !current_.completed.load()) {
-            HandleError("Request timeout");
+            Dispatch(Event::kTimeout, "Request timeout");
           }
         },
         current_.timeout_ms);
@@ -1025,9 +982,10 @@ bool HttpClient::ConnectToHost(const HttpUrl& url) {
       return;
     ScheduleRequestTimeout();  // Includes TCP connection and TLS handshake.
     if (url.IsHttps()) {
-      transport_ = CreateTlsTransport(task_runner_, this);
+      transport_ = CreateTlsTransport(task_runner_, transport_callbacks_.get());
     } else {
-      transport_ = std::make_unique<PlainTcpTransport>(task_runner_, this);
+      transport_ = std::make_unique<PlainTcpTransport>(
+          task_runner_, transport_callbacks_.get());
     }
     TlsCertConfig cfg = TlsCertConfig::Default();
     if (!verify_ssl_) {
@@ -1063,7 +1021,7 @@ HttpHeaders HttpClient::MergeHeaders(const HttpHeaders& request_headers) {
   return merged;
 }
 
-void HttpClient::ParseResponseHeaders(const std::string& header_text) {
+bool HttpClient::ParseResponseHeaders(const std::string& header_text) {
   std::istringstream stream(header_text);
   std::string line;
 
@@ -1077,7 +1035,16 @@ void HttpClient::ParseResponseHeaders(const std::string& header_text) {
     // Parse "HTTP/1.1 200 OK"
     std::istringstream status_line(line);
     std::string http_version;
-    status_line >> http_version >> current_.response.status_code;
+    std::string status;
+    status_line >> http_version >> status;
+    auto parsed = std::from_chars(status.data(), status.data() + status.size(),
+                                  current_.response.status_code);
+    if ((http_version != "HTTP/1.0" && http_version != "HTTP/1.1") ||
+        status.size() != 3 || parsed.ec != std::errc() ||
+        parsed.ptr != status.data() + status.size() ||
+        current_.response.status_code < 100 ||
+        current_.response.status_code > 599)
+      return false;
     std::getline(status_line, current_.response.status_message);
     // Trim leading space
     if (!current_.response.status_message.empty() &&
@@ -1097,7 +1064,8 @@ void HttpClient::ParseResponseHeaders(const std::string& header_text) {
     }
 
     size_t colon_pos = line.find(':');
-    if (colon_pos != std::string::npos) {
+    if (colon_pos == 0 || colon_pos == std::string::npos) return false;
+    {
       std::string name = line.substr(0, colon_pos);
       std::string value = line.substr(colon_pos + 1);
 
@@ -1105,6 +1073,7 @@ void HttpClient::ParseResponseHeaders(const std::string& header_text) {
       current_.response.headers.emplace_back(name, value);
     }
   }
+  return true;
 }
 
 void HttpClient::ProcessSetCookieHeader(const std::string& cookie_header,
@@ -1135,41 +1104,4 @@ std::string HttpClient::GenerateBoundary() {
   return boundary;
 }
 
-size_t HttpClient::CalculateMultipartSize(
-    const std::vector<HttpClient::MultipartField>& fields,
-    const std::vector<HttpClient::MultipartFile>& files,
-    const std::string& boundary) {
-  size_t total_size = 0;
-
-  // Calculate fields size
-  for (const auto& field : fields) {
-    total_size += 2 + boundary.size() + 2;  // --boundary\r\n
-    // Content-Disposition: form-data; name=""\r\n\r\n
-    total_size += 39 + field.name.size() + 4;
-    total_size += field.value.size() + 2;  // value\r\n
-  }
-
-  // Calculate files size
-  for (const auto& file : files) {
-    total_size += 2 + boundary.size() + 2;  // --boundary\r\n
-    // Content-Disposition header
-    total_size += 38 + file.field_name.size() + 13 + file.filename.size() + 3;
-    total_size +=
-        14 + file.content_type.size() + 4;  // Content-Type: type\r\n\r\n
-
-    // Get file size with error handling
-    size_t file_size = HttpUtils::GetFileSize(file.file_path);
-    if (file_size == 0) {
-      throw std::runtime_error("Failed to get file size for: " +
-                               file.file_path);
-    }
-    total_size += file_size;
-    total_size += 2;  // \r\n
-  }
-
-  // Final boundary
-  total_size += 2 + boundary.size() + 4;  // --boundary--\r\n
-
-  return total_size;
-}
 }  // namespace xtils
