@@ -1,7 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <thread>
+#include <vector>
 
 #include "doctest/doctest.h"
 #include "xtils/tasks/thread_task_runner.h"
@@ -22,6 +24,69 @@ TEST_CASE("TaskRunner: queued owners release watches before runner teardown") {
     runner.PostTask([owner] {});
   }
   CHECK(released);
+}
+
+TEST_CASE("TaskRunner: stop runs owner callbacks then drains accepted work") {
+  auto runner = ThreadTaskRunner::CreateAndStart("ext-orderly-stop");
+  std::promise<void> blocked, release;
+  auto resume = release.get_future().share();
+  std::mutex mutex;
+  std::vector<int> order;
+  runner.PostTask([&] {
+    blocked.set_value();
+    resume.wait();
+  });
+  blocked.get_future().wait();
+  REQUIRE(runner.TryPostTask([&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    order.push_back(2);
+  }));
+  REQUIRE(runner.RegisterShutdownTask([&] {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      order.push_back(1);
+    }
+    CHECK(runner.TryPostTask([&] {
+      std::lock_guard<std::mutex> lock(mutex);
+      order.push_back(3);
+    }));
+  }));
+  auto stop = std::async(std::launch::async, [&] { runner.Stop(); });
+  while (!runner.get()->QuitCalled()) std::this_thread::yield();
+  CHECK_FALSE(runner.TryPostTask([] {}));
+  release.set_value();
+  REQUIRE(stop.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+  stop.get();
+  CHECK(order == std::vector<int>{1, 2, 3});
+  CHECK_FALSE(runner.TryPostTask([] {}));
+}
+
+TEST_CASE("TaskRunner: concurrent posting cannot access a destroyed runner") {
+  auto runner = ThreadTaskRunner::CreateAndStart("ext-concurrent-stop");
+  std::atomic<bool> finished{false};
+  std::thread poster([&] {
+    while (!finished.load()) {
+      runner.TryPostTask([] {});
+      std::this_thread::yield();
+    }
+  });
+  runner.Stop();
+  finished = true;
+  poster.join();
+  CHECK_FALSE(runner.TryPostTask([] {}));
+}
+
+TEST_CASE("TaskRunner: removing shutdown hooks releases captured owners") {
+  auto runner = ThreadTaskRunner::CreateAndStart("ext-shutdown-owner");
+  auto owner = std::make_shared<int>(42);
+  std::weak_ptr<int> weak = owner;
+  auto handle = runner.RegisterShutdownTask([owner] {});
+  REQUIRE(handle != TaskRunner::kInvalidShutdownTaskHandle);
+  owner.reset();
+  CHECK_FALSE(weak.expired());
+  CHECK(runner.UnregisterShutdownTask(handle));
+  CHECK(weak.expired());
+  runner.Stop();
 }
 
 TEST_CASE("TaskRunner: PostDelayedTaskWithHandle returns nonzero handle") {

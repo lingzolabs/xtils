@@ -181,7 +181,13 @@ then resume buffered pipelined requests. Custom networking TaskRunners need both
 Runner teardown drops queued resource owners while watch containers are valid.
 Synchronous HTTP calls use an independent caller-side deadline so even a
 stalled runner cannot keep the calling thread blocked indefinitely; a stopped
-runner cannot process cancellation and must not be reused.
+runner cannot process cancellation and must not be reused. Built-in
+`ThreadTaskRunner::Stop()` provides orderly shutdown: reject new external work,
+invoke registered client shutdown callbacks on the owner thread, drain accepted
+immediate cleanup tasks, then join. `TryPostTask` reports rejection; custom
+runners must override it and register shutdown hooks to provide the same
+contract. `Stop()` cannot interrupt a blocked owner-thread task or guarantee a
+bounded join time.
 
 The response parser, not disconnect alone, decides completion: fixed-length
 bodies require all bytes, chunked bodies require the terminal chunk and complete

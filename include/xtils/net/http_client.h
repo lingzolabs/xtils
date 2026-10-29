@@ -185,7 +185,7 @@ class HttpClient : public TransportEventListener {
   bool PrepareOutput(const Request& request);
   void PumpOutput();
   void ScheduleOutput();
-  void PostOnRunner(std::function<void()> task);
+  bool PostOnRunner(std::function<void()> task);
   void ProcessReceivedData(const void* data, size_t len);
   bool DeliverBody(size_t len);
   static bool IsAlive(const std::shared_ptr<LifetimeToken>& lifetime);
@@ -294,7 +294,9 @@ class HttpClient : public TransportEventListener {
   std::string terminal_error_;
   std::shared_ptr<std::promise<Response>> completion_;
   std::atomic<uint64_t> cancelled_generation_{0};
+  std::atomic<bool> shutdown_requested_{false};
   TaskRunner::DelayedTaskHandle timeout_handle_ = 0;
+  TaskRunner::ShutdownTaskHandle shutdown_handle_ = 0;
 
   TaskRunner* task_runner_;
   Listener* listener_;

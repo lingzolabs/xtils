@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 #include "xtils/tasks/unix_task_runner.h"
@@ -35,6 +36,10 @@ class ThreadTaskRunner : public TaskRunner {
   ThreadTaskRunner& operator=(ThreadTaskRunner&&);
   ~ThreadTaskRunner() override;
 
+  // Stop on a non-owner thread; run shutdown callbacks and drain accepted work.
+  // The runner can no longer accept external tasks afterward.
+  void Stop();
+
   // Warning: do not call Quit() on the returned runner pointer, the termination
   // should be handled exclusively by this class' destructor.
   UnixTaskRunner* get() const { return task_runner_; }
@@ -42,6 +47,10 @@ class ThreadTaskRunner : public TaskRunner {
   // TaskRunner implementation.
   // These methods just proxy to the underlying task_runner_.
   void PostTask(std::function<void()>) override;
+  bool TryPostTask(std::function<void()>) override;
+  ShutdownTaskHandle RegisterShutdownTask(std::function<void()>) override;
+  bool UnregisterShutdownTask(ShutdownTaskHandle) override;
+  bool AcceptsNewWork() const override;
   void PostDelayedTask(std::function<void()>, uint32_t delay_ms) override;
   DelayedTaskHandle PostDelayedTaskWithHandle(std::function<void()>,
                                               uint32_t delay_ms) override;
@@ -57,6 +66,8 @@ class ThreadTaskRunner : public TaskRunner {
 
   std::thread thread_;
   std::string name_;
+  mutable std::mutex runner_mutex_;
+  std::mutex stop_mutex_;
   UnixTaskRunner* task_runner_ = nullptr;
 };
 }  // namespace xtils

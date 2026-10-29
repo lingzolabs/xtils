@@ -6,6 +6,7 @@
 #include "xtils/net/http_client.h"
 #include "xtils/net/http_server.h"
 #include "xtils/tasks/thread_task_runner.h"
+#include "xtils/tasks/unix_task_runner.h"
 #include "xtils/utils/scoped.h"
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -65,6 +66,9 @@ TEST_CASE("HTTP lifecycle: synchronous timeout works while runner is stalled") {
   CHECK(ready);
   auto response = result.get();
   if (ready) CHECK(response.status_message == "Request timeout");
+  std::promise<void> resumed;
+  runner.PostTask([&] { resumed.set_value(); });
+  resumed.get_future().wait();
 }
 
 TEST_CASE(
@@ -96,6 +100,80 @@ TEST_CASE(
     cleaned.set_value();
   });
   cleaned.get_future().wait();
+}
+
+TEST_CASE("HTTP lifecycle: stopped runner rejects new async requests") {
+  UnixTaskRunner runner;
+  runner.Quit();
+  HttpClient client(&runner);
+  Listener listener;
+  std::promise<bool> accepted;
+  std::thread caller([&] {
+    accepted.set_value(client.GetAsync("http://127.0.0.1:1/", &listener));
+  });
+  CHECK_FALSE(accepted.get_future().get());
+  caller.join();
+  CHECK_FALSE(client.IsBusy());
+  CHECK(listener.terminals == 0);
+}
+
+TEST_CASE(
+    "HTTP lifecycle: accepted queued request finishes during runner stop") {
+  auto runner = ThreadTaskRunner::CreateAndStart("http_orderly_stop");
+  std::promise<void> entered, release;
+  auto resume = release.get_future().share();
+  runner.PostTask([&] {
+    entered.set_value();
+    resume.wait();
+  });
+  entered.get_future().wait();
+  HttpClient client(&runner);
+  Listener listener;
+  REQUIRE(client.GetAsync("http://127.0.0.1:1/", &listener));
+  auto terminal = listener.result.get_future();
+  auto stopping = std::async(std::launch::async, [&] { runner.Stop(); });
+  // The blocked owner thread keeps the runner alive until we release it.
+  while (!runner.get()->QuitCalled()) std::this_thread::yield();
+  release.set_value();
+  REQUIRE(stopping.wait_for(2s) == std::future_status::ready);
+  stopping.get();
+  REQUIRE(terminal.wait_for(1s) == std::future_status::ready);
+  CHECK(terminal.get().status_message == "Runner stopped");
+  CHECK(listener.terminals == 1);
+  CHECK_FALSE(client.IsBusy());
+  CHECK_FALSE(runner.TryPostTask([] {}));
+  CHECK_FALSE(client.GetAsync("http://127.0.0.1:1/", &listener));
+}
+
+TEST_CASE("HTTP lifecycle: active request is cancelled before runner exits") {
+  std::promise<void> release_server;
+  auto server_released = release_server.get_future();
+  NetTestServer server([&](int fd) {
+    NetTestServer::ReadHeaders(fd);
+    server_released.wait();
+  });
+  auto runner = ThreadTaskRunner::CreateAndStart("http_stop_active");
+  struct ProgressListener : Listener {
+    void OnProgress(HttpClient*, size_t, int64_t) override {
+      if (!reported.exchange(true)) active.set_value();
+    }
+    std::atomic<bool> reported{false};
+    std::promise<void> active;
+  } listener;
+  HttpClient client(&runner);
+  REQUIRE(client.GetAsync(server.Url(), &listener));
+  auto active = listener.active.get_future();
+  if (active.wait_for(2s) != std::future_status::ready) {
+    release_server.set_value();
+    FAIL("request never became active");
+  }
+  auto terminal = listener.result.get_future();
+  runner.Stop();
+  release_server.set_value();
+  REQUIRE(terminal.wait_for(1s) == std::future_status::ready);
+  CHECK(terminal.get().status_message == "Runner stopped");
+  CHECK(listener.terminals == 1);
+  CHECK_FALSE(client.IsBusy());
 }
 
 TEST_CASE("HTTP lifecycle: cancellation before queued startup is not lost") {

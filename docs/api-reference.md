@@ -589,6 +589,10 @@ void SetCookie(name, value, domain="");
 Synchronous HTTP methods must not run on their owner runner. Their caller-side
 wait is bounded by the request timeout, even if the runner stops; a stopped
 runner cannot finish cancellation, so discard that client rather than retrying.
+For built-in runners, `ThreadTaskRunner::Stop()` instead performs an orderly
+shutdown: accepted active requests receive one terminal `"Runner stopped"`
+callback, new requests are rejected without a callback. Keep clients/listeners
+alive until Stop returns; do not call Stop from its own worker thread.
 Server in-memory staging is limited to 16 MiB per connection, in addition to
 the 8 MiB socket queue (oversized
 responses/WebSocket frames close the connection); use `SendFileStreaming` for
@@ -799,6 +803,10 @@ using Task = std::function<void()>;
 
 class TaskRunner {
   virtual void PostTask(std::function<void()>) = 0;
+  virtual bool TryPostTask(std::function<void()>);
+  virtual ShutdownTaskHandle RegisterShutdownTask(std::function<void()>);
+  virtual bool UnregisterShutdownTask(ShutdownTaskHandle);
+  virtual bool AcceptsNewWork() const;
   virtual void PostDelayedTask(std::function<void()>, uint32_t delay_ms) = 0;
   virtual void AddFileDescriptorWatch(PlatformHandle, std::function<void()>) = 0;
   virtual bool SetFileDescriptorWatchWritable(PlatformHandle, bool enabled);
@@ -830,6 +838,7 @@ static std::shared_ptr<ThreadTaskRunner> CreateAndStartShared(name="");
 
 // Access underlying runner
 UnixTaskRunner* get() const;
+void Stop();  // owner-thread callbacks + accepted tasks drain, then join
 // Implements TaskRunner interface (proxied to internal runner)
 ```
 

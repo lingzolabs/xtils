@@ -62,14 +62,40 @@ void UnixTaskRunner::Run() {
   {
     std::lock_guard<std::mutex> lock(lock_);
     quit_ = false;
+    running_loop_ = true;
   }
+  bool stopping = false;
   for (;;) {
-    int poll_timeout_ms;
+    int poll_timeout_ms = 0;
+    decltype(shutdown_tasks_) callbacks;
     {
       std::lock_guard<std::mutex> lock(lock_);
-      if (quit_) return;
-      poll_timeout_ms = GetDelayMsToNextTaskLocked();
-      UpdateWatchTasksLocked();
+      if (quit_) {
+        if (!stopping) callbacks.swap(shutdown_tasks_);
+        stopping = true;
+        if (callbacks.empty() && immediate_tasks_.empty()) {
+          running_loop_ = false;
+          return;
+        }
+      } else {
+        poll_timeout_ms = GetDelayMsToNextTaskLocked();
+        UpdateWatchTasksLocked();
+      }
+    }
+    if (stopping) {
+      for (auto& entry : callbacks) entry.second();
+      // Shutdown callbacks may schedule completion tasks. Drain those before
+      // leaving, but do not execute delayed tasks or poll watches.
+      std::function<void()> immediate;
+      {
+        std::lock_guard<std::mutex> lock(lock_);
+        if (!immediate_tasks_.empty()) {
+          immediate = std::move(immediate_tasks_.front());
+          immediate_tasks_.pop_front();
+        }
+      }
+      if (immediate) RunTaskWithWatchdogGuard(immediate);
+      continue;
     }
 
     int ret = poll(&poll_fds_[0], static_cast<nfds_t>(poll_fds_.size()),
@@ -205,15 +231,39 @@ int UnixTaskRunner::GetDelayMsToNextTaskLocked() const {
 }
 
 void UnixTaskRunner::PostTask(std::function<void()> task) {
+  TryPostTask(std::move(task));
+}
+
+bool UnixTaskRunner::AcceptsNewWork() const {
+  std::lock_guard<std::mutex> lock(lock_);
+  return !quit_;
+}
+
+TaskRunner::ShutdownTaskHandle UnixTaskRunner::RegisterShutdownTask(
+    std::function<void()> task) {
+  std::lock_guard<std::mutex> lock(lock_);
+  if (quit_) return kInvalidShutdownTaskHandle;
+  const auto handle = next_shutdown_handle_++;
+  shutdown_tasks_.emplace(handle, std::move(task));
+  return handle;
+}
+
+bool UnixTaskRunner::UnregisterShutdownTask(ShutdownTaskHandle handle) {
+  std::lock_guard<std::mutex> lock(lock_);
+  return shutdown_tasks_.erase(handle) != 0;
+}
+
+bool UnixTaskRunner::TryPostTask(std::function<void()> task) {
   TRACE_SCOPE("UnixTaskRunner:PostTask");
   bool was_empty;
   {
     std::lock_guard<std::mutex> lock(lock_);
-    if (quit_) return;
+    if (quit_ && !(running_loop_ && RunsTasksOnCurrentThread())) return false;
     was_empty = immediate_tasks_.empty();
     immediate_tasks_.push_back(std::move(task));
   }
   if (was_empty) WakeUp();
+  return true;
 }
 
 void UnixTaskRunner::PostDelayedTask(std::function<void()> task,

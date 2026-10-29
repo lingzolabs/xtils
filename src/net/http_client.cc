@@ -128,9 +128,29 @@ HttpClient::HttpClient(TaskRunner* task_runner)
   SetUserAgent("xtils/1.0");
   InitializeLifecycle();
   transport_callbacks_ = std::make_unique<TransportCallbacks>(this, lifetime_);
+  auto lifetime = lifetime_;
+  shutdown_handle_ = task_runner_->RegisterShutdownTask([this, lifetime] {
+    {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (!lifetime->alive) return;
+      ++lifetime->active_callbacks;
+      lifetime->callback_thread = std::this_thread::get_id();
+    }
+    Scoped guard([lifetime] {
+      std::lock_guard<std::mutex> lock(lifetime->mutex);
+      if (--lifetime->active_callbacks == 0) {
+        lifetime->callback_thread = std::thread::id();
+        lifetime->cv.notify_all();
+      }
+    });
+    shutdown_requested_.store(true);
+    if (IsBusy() && !lifecycle_.IsInState(idle_))
+      Dispatch(Event::kCancel, "Runner stopped");
+  });
 }
 
 HttpClient::~HttpClient() {
+  if (shutdown_handle_) task_runner_->UnregisterShutdownTask(shutdown_handle_);
   {
     std::unique_lock<std::mutex> lock(lifetime_->mutex);
     lifetime_->alive = false;
@@ -191,14 +211,19 @@ bool HttpClient::Submit(const Request& request, Listener* listener,
                         std::shared_ptr<std::promise<Response>> completion) {
   if (!request.url.IsValid()) return false;
   std::lock_guard<std::mutex> lock(request_mutex_);
+  if (!task_runner_->AcceptsNewWork()) return false;
   State expected = State::kIdle;
   if (!state_.compare_exchange_strong(expected, State::kConnecting))
     return false;
   auto generation = request_generation_.fetch_add(1) + 1;
   active_request_generation_.store(generation);
-  PostOnRunner([this, request, listener, completion, generation]() mutable {
-    StartOnRunner(std::move(request), listener, completion, generation);
-  });
+  if (!PostOnRunner(
+          [this, request, listener, completion, generation]() mutable {
+            StartOnRunner(std::move(request), listener, completion, generation);
+          })) {
+    state_.store(State::kIdle);
+    return false;
+  }
   return true;
 }
 
@@ -215,6 +240,10 @@ void HttpClient::StartOnRunner(
                             ? current_.request.timeout_ms
                             : default_timeout_ms_;
   Dispatch(Event::kStart);
+  if (shutdown_requested_.load()) {
+    Dispatch(Event::kCancel, "Runner stopped");
+    return;
+  }
   if (cancelled_generation_.load() == generation) {
     Dispatch(Event::kCancel, "Request cancelled");
     return;
@@ -563,9 +592,9 @@ std::string HttpClient::BuildHttpRequest(const HttpClient::Request& request) {
   return oss.str();
 }
 
-void HttpClient::PostOnRunner(std::function<void()> task) {
+bool HttpClient::PostOnRunner(std::function<void()> task) {
   auto lifetime = lifetime_;
-  task_runner_->PostTask([lifetime, task = std::move(task)] {
+  return task_runner_->TryPostTask([lifetime, task = std::move(task)] {
     {
       std::lock_guard<std::mutex> lock(lifetime->mutex);
       if (!lifetime->alive) return;

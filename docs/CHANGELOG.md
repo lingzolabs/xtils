@@ -7,6 +7,13 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
+- fix(tasks): add confirmed task submission and owner-thread shutdown callbacks.
+  ThreadTaskRunner::Stop() rejects new external work, invokes shutdown callbacks,
+  drains accepted immediate tasks, then joins; calling Stop twice is safe.
+- fix(http): reject async requests submitted to a stopped runner and cancel
+  accepted queued/active requests during orderly shutdown with one terminal
+  "Runner stopped" result. Internal cleanup tasks may still run while draining.
+
 - fix(http): bound synchronous waits independently of the event runner so a
   stalled or stopped runner cannot hang Send indefinitely. Cap pending server
   in-memory responses/WebSocket frames at 16 MiB; close the connection on

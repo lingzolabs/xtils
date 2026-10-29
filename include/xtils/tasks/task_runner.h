@@ -17,6 +17,23 @@ class TaskRunner {
 
   virtual ~TaskRunner() = default;
 
+  // Returns false if work can no longer be accepted. Stoppable custom
+  // runners must override this; default preserves older implementations.
+  virtual bool TryPostTask(std::function<void()> task) {
+    PostTask(std::move(task));
+    return true;
+  }
+
+  // Runs on the owner thread before accepted tasks drain during shutdown.
+  using ShutdownTaskHandle = uint64_t;
+  static constexpr ShutdownTaskHandle kInvalidShutdownTaskHandle = 0;
+  virtual ShutdownTaskHandle RegisterShutdownTask(std::function<void()>) {
+    return kInvalidShutdownTaskHandle;
+  }
+  virtual bool UnregisterShutdownTask(ShutdownTaskHandle) { return false; }
+  // Distinguish internal cleanup tasks from new user work during draining.
+  virtual bool AcceptsNewWork() const { return true; }
+
   virtual void PostTask(std::function<void()>) = 0;
 
   virtual void PostDelayedTask(std::function<void()>, uint32_t delay_ms) = 0;

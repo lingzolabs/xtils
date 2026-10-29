@@ -78,6 +78,10 @@ class UnixTaskRunner : public TaskRunner {
 
   // TaskRunner implementation:
   void PostTask(std::function<void()>) override;
+  bool TryPostTask(std::function<void()>) override;
+  ShutdownTaskHandle RegisterShutdownTask(std::function<void()>) override;
+  bool UnregisterShutdownTask(ShutdownTaskHandle) override;
+  bool AcceptsNewWork() const override;
   void PostDelayedTask(std::function<void()>, uint32_t delay_ms) override;
   DelayedTaskHandle PostDelayedTaskWithHandle(std::function<void()> t,
                                               uint32_t delay_ms) override;
@@ -108,7 +112,7 @@ class UnixTaskRunner : public TaskRunner {
 
   std::vector<struct pollfd> poll_fds_;
 
-  std::mutex lock_;
+  mutable std::mutex lock_;
 
   std::deque<std::function<void()>> immediate_tasks_;
   // Each delayed task carries a cancellation handle. handle == 0 means
@@ -121,6 +125,9 @@ class UnixTaskRunner : public TaskRunner {
   std::multimap<TimeMillis, DelayedSlot> delayed_tasks_;
   std::atomic<DelayedTaskHandle> next_delayed_handle_{1};
   bool quit_ = false;
+  bool running_loop_ = false;
+  std::map<ShutdownTaskHandle, std::function<void()>> shutdown_tasks_;
+  ShutdownTaskHandle next_shutdown_handle_ = 1;
   TimeMillis advanced_time_for_testing_ = TimeMillis(0);
 
   struct WatchTask {

@@ -23,12 +23,16 @@ ThreadTaskRunner& ThreadTaskRunner::operator=(ThreadTaskRunner&& other) {
   return *this;
 }
 
-ThreadTaskRunner::~ThreadTaskRunner() {
-  if (task_runner_) {
-    XTILS_CHECK(!task_runner_->QuitCalled());
-    task_runner_->Quit();
+ThreadTaskRunner::~ThreadTaskRunner() { Stop(); }
 
-    XTILS_DCHECK(thread_.joinable());
+void ThreadTaskRunner::Stop() {
+  std::lock_guard<std::mutex> stopping(stop_mutex_);
+  {
+    std::lock_guard<std::mutex> lock(runner_mutex_);
+    if (task_runner_) {
+      XTILS_CHECK(!task_runner_->RunsTasksOnCurrentThread());
+      task_runner_->Quit();
+    }
   }
   if (thread_.joinable()) thread_.join();
 }
@@ -64,10 +68,36 @@ void ThreadTaskRunner::RunTaskThread(
   UnixTaskRunner task_runner;
   task_runner.PostTask(std::bind(std::move(initializer), &task_runner));
   task_runner.Run();
+  // Publish rejection before the stack-allocated runner is destroyed. A
+  // concurrent TryPostTask holds this lock while it accesses the pointer.
+  std::lock_guard<std::mutex> lock(runner_mutex_);
+  task_runner_ = nullptr;
 }
 
 void ThreadTaskRunner::PostTask(std::function<void()> task) {
-  task_runner_->PostTask(std::move(task));
+  TryPostTask(std::move(task));
+}
+
+bool ThreadTaskRunner::TryPostTask(std::function<void()> task) {
+  std::lock_guard<std::mutex> lock(runner_mutex_);
+  return task_runner_ && task_runner_->TryPostTask(std::move(task));
+}
+
+bool ThreadTaskRunner::AcceptsNewWork() const {
+  std::lock_guard<std::mutex> lock(runner_mutex_);
+  return task_runner_ && task_runner_->AcceptsNewWork();
+}
+
+TaskRunner::ShutdownTaskHandle ThreadTaskRunner::RegisterShutdownTask(
+    std::function<void()> task) {
+  std::lock_guard<std::mutex> lock(runner_mutex_);
+  return task_runner_ ? task_runner_->RegisterShutdownTask(std::move(task))
+                      : kInvalidShutdownTaskHandle;
+}
+
+bool ThreadTaskRunner::UnregisterShutdownTask(ShutdownTaskHandle handle) {
+  std::lock_guard<std::mutex> lock(runner_mutex_);
+  return task_runner_ && task_runner_->UnregisterShutdownTask(handle);
 }
 
 void ThreadTaskRunner::PostDelayedTask(std::function<void()> task,
@@ -104,7 +134,8 @@ void ThreadTaskRunner::RemoveFileDescriptorWatch(PlatformHandle handle) {
 }
 
 bool ThreadTaskRunner::RunsTasksOnCurrentThread() const {
-  return task_runner_->RunsTasksOnCurrentThread();
+  std::lock_guard<std::mutex> lock(runner_mutex_);
+  return task_runner_ && task_runner_->RunsTasksOnCurrentThread();
 }
 
 }  // namespace xtils
