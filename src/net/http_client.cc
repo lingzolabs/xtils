@@ -170,8 +170,16 @@ HttpClient::Response HttpClient::Send(const Request& request) {
     error.status_message = "Client is busy";
     return error;
   }
-  // The runner owns the deadline. A per-request promise cannot accidentally
-  // observe the result or completion flag of a later request.
+  // Keep an independent deadline: a stopped or stalled runner cannot run its
+  // timer or consume a cancellation command. The request remains single-flight
+  // until the runner eventually processes that cancellation.
+  auto timeout = std::chrono::milliseconds(
+      request.timeout_ms > 0 ? request.timeout_ms : default_timeout_ms_);
+  if (result.wait_for(timeout) != std::future_status::ready) {
+    Cancel();
+    error.status_message = "Request timeout";
+    return error;
+  }
   return result.get();
 }
 

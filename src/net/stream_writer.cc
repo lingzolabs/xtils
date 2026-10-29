@@ -24,12 +24,14 @@ void StreamWriter::Append(std::string bytes) {
   if (bytes.empty() || !AddSize(bytes.size())) return;
   segments_.emplace_back();
   segments_.back().data = std::move(bytes);
+  buffered_memory_bytes_ += segments_.back().data.size();
 }
 
 void StreamWriter::Prepend(std::string bytes) {
   if (bytes.empty() || !AddSize(bytes.size())) return;
   segments_.emplace_front();
   segments_.front().data = std::move(bytes);
+  buffered_memory_bytes_ += segments_.front().data.size();
 }
 
 bool StreamWriter::AppendFile(const std::string& path) {
@@ -83,6 +85,7 @@ StreamWriter::PumpResult StreamWriter::Pump(const Sink& sink, size_t budget) {
     }
     part.offset += count;
     accepted_bytes_ += count;
+    if (!part.is_file) buffered_memory_bytes_ -= count;
     budget -= count;
     if (part.is_file) {
       part.remaining -= count;
@@ -102,6 +105,7 @@ void StreamWriter::Reset() {
   segments_.clear();
   total_bytes_ = 0;
   accepted_bytes_ = 0;
+  buffered_memory_bytes_ = 0;
   error_.clear();
 }
 

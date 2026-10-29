@@ -530,6 +530,7 @@ void HttpServerConnection::SendResponseHeaders(const char* http_code,
     append("Vary: Origin\r\n");
   }
   append("\r\n");  // End-of-headers marker.
+  if (!CanQueueOutput(resp_hdr.size())) return;
   output_.Prepend(std::string(resp_hdr.data(), resp_hdr.size()));
   ScheduleOutput();
 }
@@ -540,6 +541,7 @@ void HttpServerConnection::SendResponseBody(const void* data, size_t len) {
     XTILS_DCHECK(len == 0);
     return;
   }
+  if (!CanQueueOutput(len)) return;
   content_len_actual_ += len;
   XTILS_CHECK(content_len_actual_ <= content_len_headers_ ||
               content_len_headers_ == kOmitContentLength);
@@ -554,6 +556,17 @@ void HttpServer::OnWriteCapacityAvailable(UnixSocket* self) {
       return;
     }
   }
+}
+
+bool HttpServerConnection::CanQueueOutput(size_t bytes) {
+  if (!sock->is_connected()) return false;
+  // File segments have a large logical length but keep only one small chunk
+  // resident. A regular response / WebSocket frame is entirely in memory.
+  const size_t queued = output_.buffered_memory_bytes();
+  if (bytes <= kMaxBufferedOutput && queued <= kMaxBufferedOutput - bytes)
+    return true;
+  sock->Shutdown(/*notify=*/true);
+  return false;
 }
 
 void HttpServerConnection::Close() {
@@ -632,6 +645,11 @@ void HttpServerConnection::SendWebsocketFrame(WebSocketOpcode opcode,
                                               size_t payload_len) {
   XTILS_CHECK(is_websocket_);
 
+  // Frame encoding adds at most ten header bytes. Refuse before allocating
+  // the frame, rather than bypassing the bounded socket queue via output_.
+  if (payload_len > kMaxBufferedOutput - 10 ||
+      !CanQueueOutput(payload_len + 10))
+    return;
   auto frame_data = WebSocketUtils::BuildFrame(
       opcode, payload, payload_len, true /* fin */, false /* mask */);
   output_.Append(std::string(frame_data.begin(), frame_data.end()));

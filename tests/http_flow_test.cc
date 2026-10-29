@@ -4,6 +4,7 @@
 
 #include "net_test_server.h"
 #include "xtils/net/http_client.h"
+#include "xtils/net/http_server.h"
 #include "xtils/tasks/thread_task_runner.h"
 #include "xtils/utils/scoped.h"
 
@@ -44,6 +45,57 @@ TEST_CASE(
   auto result = response.get_future();
   REQUIRE(result.wait_for(1s) == std::future_status::ready);
   CHECK(result.get().status_message.find("owner runner") != std::string::npos);
+}
+
+TEST_CASE("HTTP lifecycle: synchronous timeout works while runner is stalled") {
+  auto runner = ThreadTaskRunner::CreateAndStart("http_stalled_runner");
+  std::promise<void> entered, release;
+  auto resume = release.get_future().share();
+  runner.PostTask([&] {
+    entered.set_value();
+    resume.wait();
+  });
+  entered.get_future().wait();
+  HttpClient client(&runner);
+  client.SetTimeout(50);
+  auto result = std::async(std::launch::async,
+                           [&] { return client.Get("http://127.0.0.1:1/"); });
+  bool ready = result.wait_for(500ms) == std::future_status::ready;
+  release.set_value();  // Never strand the runner, even on RED.
+  CHECK(ready);
+  auto response = result.get();
+  if (ready) CHECK(response.status_message == "Request timeout");
+}
+
+TEST_CASE(
+    "HTTP server: oversized in-memory response closes instead of queuing") {
+  auto [raw, peer] =
+      UnixSocketRaw::CreatePairPosix(SockFamily::kUnix, SockType::kStream);
+  auto runner = ThreadTaskRunner::CreateAndStart("http_output_limit");
+  struct Events : UnixSocket::EventListener {
+    void OnDisconnect(UnixSocket*) override { disconnected.set_value(); }
+    std::promise<void> disconnected;
+  } events;
+  std::unique_ptr<HttpServerConnection> conn;
+  std::promise<void> started;
+  runner.PostTask([&] {
+    auto sock =
+        UnixSocket::AdoptConnected(raw.ReleaseFd(), &events, &runner,
+                                   SockFamily::kUnix, SockType::kStream);
+    conn = std::make_unique<HttpServerConnection>(std::move(sock), 4096);
+    conn->SendResponse("200 OK", {}, std::string(20 * 1024 * 1024, 'x'));
+    started.set_value();
+  });
+  started.get_future().wait();
+  auto disconnected = events.disconnected.get_future();
+  bool ready = disconnected.wait_for(1s) == std::future_status::ready;
+  CHECK(ready);
+  std::promise<void> cleaned;
+  runner.PostTask([&] {
+    conn.reset();
+    cleaned.set_value();
+  });
+  cleaned.get_future().wait();
 }
 
 TEST_CASE("HTTP lifecycle: cancellation before queued startup is not lost") {

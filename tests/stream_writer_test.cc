@@ -19,6 +19,7 @@ TEST_CASE("StreamWriter preserves a rejected chunk and yields at its budget") {
   });
   CHECK(result == StreamWriter::PumpResult::kWouldBlock);
   CHECK(writer.accepted_bytes() == 0);
+  CHECK(writer.buffered_memory_bytes() == payload.size());
   std::string received;
   bool first = true;
   auto sink = [&](const void* data, size_t len) {
@@ -32,8 +33,10 @@ TEST_CASE("StreamWriter preserves a rejected chunk and yields at its budget") {
   };
   CHECK(writer.Pump(sink) == StreamWriter::PumpResult::kYield);
   CHECK(received.size() == 256 * 1024);
+  CHECK(writer.buffered_memory_bytes() == payload.size() - received.size());
   while (!writer.empty()) writer.Pump(sink);
   CHECK(received == payload);
+  CHECK(writer.buffered_memory_bytes() == 0);
 }
 
 TEST_CASE("StreamWriter streams files in order and detects truncation") {
@@ -60,6 +63,7 @@ TEST_CASE("StreamWriter streams files in order and detects truncation") {
     while (!writer.empty()) writer.Pump(sink);
     CHECK(received == "header" + payload + "trailer");
     CHECK(writer.accepted_bytes() == writer.total_bytes());
+    CHECK(writer.buffered_memory_bytes() == 0);
   }
   SUBCASE("truncated source is an error, not successful EOF") {
     REQUIRE(ftruncate(file.get(), 3) == 0);

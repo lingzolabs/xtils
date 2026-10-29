@@ -132,6 +132,9 @@ class HttpServerConnection {
   void SendResponseBody(const void* content, size_t content_length);
   void ScheduleOutput();
   void PumpOutput();
+  // Limit owned in-memory output; large files use SendFileStreaming instead.
+  static constexpr size_t kMaxBufferedOutput = 16 * 1024 * 1024;
+  bool CanQueueOutput(size_t bytes);
 
  private:
   friend class HttpServer;

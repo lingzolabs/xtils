@@ -167,7 +167,11 @@ Active, so an early rejection can stop an unfinished upload.
 `StreamWriter` owns ordered memory/file sources, retries unchanged chunks after
 backpressure, and yields after a 256 KiB production budget. Memory sources retain
 their caller-provided content; file sources buffer only a chunk. Socket/TLS
-queues remain capped at 8 MiB. `TrySend` accepts at most 16 KiB atomically and
+queues remain capped at 8 MiB. The HTTP server additionally caps its pending
+in-memory staging at 16 MiB per connection (in addition to the 8 MiB socket
+queue); an oversized response/frame closes
+that connection, while file segments stream without counting their logical file
+size against this memory budget. `TrySend` accepts at most 16 KiB atomically and
 returns Accepted/WouldBlock/Closed/Error. Accepted means queued, not peer
 delivery. WouldBlock arms a deferred, one-shot capacity callback.
 
@@ -175,6 +179,9 @@ HTTP servers pause readable interest until their response source is consumed,
 then resume buffered pipelined requests. Custom networking TaskRunners need both
 `SetFileDescriptorWatchReadable` and `SetFileDescriptorWatchWritable`.
 Runner teardown drops queued resource owners while watch containers are valid.
+Synchronous HTTP calls use an independent caller-side deadline so even a
+stalled runner cannot keep the calling thread blocked indefinitely; a stopped
+runner cannot process cancellation and must not be reused.
 
 The response parser, not disconnect alone, decides completion: fixed-length
 bodies require all bytes, chunked bodies require the terminal chunk and complete

@@ -7,6 +7,14 @@ Format: `type(scope): description` — types: feat, fix, refactor, chore, tidy.
 
 ## Unreleased
 
+- fix(http): bound synchronous waits independently of the event runner so a
+  stalled or stopped runner cannot hang Send indefinitely. Cap pending server
+  in-memory responses/WebSocket frames at 16 MiB; close the connection on
+  overflow instead of bypassing the bounded transport queue. File responses
+  continue streaming beyond the in-memory limit.
+- test(http): cover stalled-runner timeouts, oversized in-memory responses,
+  and file responses larger than the memory budget.
+
 - fix(net): distinguish accepted chunks, backpressure, closed transports and
   errors with `TrySend`; deliver deferred capacity notifications on plain TCP,
   OpenSSL and mbedTLS. Preserve the 8 MiB transport queue limit.

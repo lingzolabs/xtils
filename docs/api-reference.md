@@ -586,7 +586,13 @@ void SetSSLCertificate(cert_path);
 void SetCookie(name, value, domain="");
 ```
 
-Synchronous HTTP methods must not run on their owner runner. The runner must
+Synchronous HTTP methods must not run on their owner runner. Their caller-side
+wait is bounded by the request timeout, even if the runner stops; a stopped
+runner cannot finish cancellation, so discard that client rather than retrying.
+Server in-memory staging is limited to 16 MiB per connection, in addition to
+the 8 MiB socket queue (oversized
+responses/WebSocket frames close the connection); use `SendFileStreaming` for
+large files. The runner must
 outlive the client; async listeners must survive until their terminal callback
 or client destruction. Cleanup precedes callbacks, allowing the callback to
 submit a new request or destroy the client. `GetLastResponse()` is not a

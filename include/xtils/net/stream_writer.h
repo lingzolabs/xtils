@@ -26,6 +26,7 @@ class StreamWriter {
   bool empty() const { return segments_.empty(); }
   size_t total_bytes() const { return total_bytes_; }
   size_t accepted_bytes() const { return accepted_bytes_; }
+  size_t buffered_memory_bytes() const { return buffered_memory_bytes_; }
   const std::string& error() const { return error_; }
 
  private:
@@ -41,6 +42,7 @@ class StreamWriter {
   std::deque<Segment> segments_;
   size_t total_bytes_ = 0;
   size_t accepted_bytes_ = 0;
+  size_t buffered_memory_bytes_ = 0;
   std::string error_;
 };
 

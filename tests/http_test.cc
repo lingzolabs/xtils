@@ -495,6 +495,9 @@ TEST_CASE("HTTP: streaming file response") {
   size_t file_size = 128 * 1024;
   SUBCASE("multiple chunks") {}
   SUBCASE("larger than output queue") { file_size = 12 * 1024 * 1024; }
+  SUBCASE("file exceeds in-memory output limit") {
+    file_size = 20 * 1024 * 1024;
+  }
   // Create a temp file with known content.
   char path[] = "/tmp/xtils_http_test_stream-XXXXXX";
   int fd = mkstemp(path);
